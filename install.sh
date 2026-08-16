@@ -8,4 +8,4 @@ command -v pi >/dev/null 2>&1 || { echo "错误: 未找到 pi 命令，请先安
 
 pi install "$PKG_DIR"
 echo "已通过 pi install 安装（写入 ~/.pi/agent/settings.json packages）"
-echo "登录: /login ${LEGACY_PROVIDER_ID:-litellm}"
+echo "登录: /login ${LITELLM_OIDC_PROVIDER_ID:-litellm}"

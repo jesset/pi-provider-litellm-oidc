@@ -30,7 +30,7 @@ LiteLLM 网关 (enable_jwt_auth + JWKS 指向 Keycloak，网关侧零改动)
 
 ```bash
 # git 源（本仓库；注意 scp 简写必须带 git@，否则 Pi 会当作本地路径）
-pi install git:git@github.com/jesset/pi-provider-litellm-oidc.git@v0.3.2
+pi install git:git@github.com/jesset/pi-provider-litellm-oidc.git@v0.4.0
 
 # npm 源（发布到内网 registry 后）
 pi install npm:pi-provider-litellm-oidc
@@ -62,31 +62,33 @@ cd pi-provider-litellm-oidc && ./install.sh
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `LEGACY_PROVIDER_ID` | `litellm` | Pi provider ID（`/login`、`--model` 的前缀）；改它即可多实例并存 |
-| `LEGACY_DISPLAY_NAME` | `LiteLLM Gateway` | UI 显示名 |
-| `LEGACY_GATEWAY_URL` | `https://litellm.example.com` | LiteLLM 网关地址 |
-| `LEGACY_KEYCLOAK_URL` | `https://keycloak.example.com` | Keycloak 根地址 |
-| `LEGACY_KEYCLOAK_REALM` | `Example` | realm 名 |
-| `LEGACY_KEYCLOAK_CLIENT_ID` | `coding-agent-cli` | OAuth 公共客户端 ID |
-| `LEGACY_KEYCLOAK_SCOPE` | `openid profile email offline_access` | OIDC scope |
+| `LITELLM_OIDC_PROVIDER_ID` | `litellm` | Pi provider ID（`/login`、`--model` 的前缀）；改它即可多实例并存 |
+| `LITELLM_OIDC_DISPLAY_NAME` | `LiteLLM Gateway` | UI 显示名 |
+| `LITELLM_OIDC_GATEWAY_URL` | `https://litellm.example.com` | LiteLLM 网关地址 |
+| `LITELLM_OIDC_KEYCLOAK_URL` | `https://keycloak.example.com` | Keycloak 根地址 |
+| `LITELLM_OIDC_KEYCLOAK_REALM` | `Example` | realm 名 |
+| `LITELLM_OIDC_KEYCLOAK_CLIENT_ID` | `coding-agent-cli` | OAuth 公共客户端 ID |
+| `LITELLM_OIDC_KEYCLOAK_SCOPE` | `openid profile email offline_access` | OIDC scope |
 
-环境变量写法：`~/.pi/agent/settings.json` 的 `env` 块、shell profile、或启动时 `LEGACY_...=... pi`。
+> **升级注意（v0.4.0 起）**：环境变量前缀已由 `LEGACY_*` 一刀切换为 `LITELLM_OIDC_*`（变量名属于扩展而非具体部署，与仓库名对齐；LiteLLM 仅保留为默认回退值）。若 shell profile 或 `~/.pi/agent/settings.json` 的 `env` 块中写有旧变量，需同步改名；未设置任何变量的用户无感，默认值行为不变。
+
+环境变量写法：`~/.pi/agent/settings.json` 的 `env` 块、shell profile、或启动时 `LITELLM_OIDC_...=... pi`。
 
 ### 多实例示例
 
 为另一套环境（如 staging 网关）同时注册第二个 provider：
 
 ```bash
-LEGACY_PROVIDER_ID=staging-gateway \
-LEGACY_DISPLAY_NAME="Staging Gateway" \
-LEGACY_GATEWAY_URL=https://gateway.ai.example.com \
-LEGACY_KEYCLOAK_URL=https://keycloak.example.com:443 \
-LEGACY_KEYCLOAK_REALM=staging \
+LITELLM_OIDC_PROVIDER_ID=staging-gateway \
+LITELLM_OIDC_DISPLAY_NAME="Staging Gateway" \
+LITELLM_OIDC_GATEWAY_URL=https://gateway.ai.example.com \
+LITELLM_OIDC_KEYCLOAK_URL=https://keycloak.example.com:443 \
+LITELLM_OIDC_KEYCLOAK_REALM=staging \
 pi
 # 之后 /login staging-gateway 与 /login litellm 互不影响
 ```
 
-> 注意：变量在扩展加载时读取。同一进程内改环境变量需 `/reload`；两套实例并存需要两个 pi 进程或两份扩展副本（改 `LEGACY_PROVIDER_ID` 拷贝目录）。单进程多实例的配置文件化（JSON per-instance）是后续演进方向。
+> 注意：变量在扩展加载时读取。同一进程内改环境变量需 `/reload`；两套实例并存需要两个 pi 进程或两份扩展副本（改 `LITELLM_OIDC_PROVIDER_ID` 拷贝目录）。单进程多实例的配置文件化（JSON per-instance）是后续演进方向。
 
 ## Session / Customer 标识注入（网关聚合与用户归因）
 
