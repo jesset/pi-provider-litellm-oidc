@@ -135,8 +135,14 @@ pi
 ## 开发
 
 ```bash
-# 类型检查（需 peer 依赖可解析，本地软链或 npm install 后）
-bunx tsc -p tsconfig.json
+# 类型检查（机器无关写法，详见 CLAUDE.md 开发流程）
+npm install --no-save typescript@5 @types/node@22
+PI_ROOT="$(npm root -g)/@earendil-works/pi-coding-agent"
+mkdir -p node_modules/@earendil-works
+ln -sfn "$PI_ROOT" node_modules/@earendil-works/pi-coding-agent
+ln -sfn "$PI_ROOT/node_modules/@earendil-works/pi-ai" node_modules/@earendil-works/pi-ai
+./node_modules/.bin/tsc -p tsconfig.json
+rm -rf node_modules
 ```
 
-源码即发布物（Pi 原生加载 .ts，无需构建步骤）。
+源码即发布物（Pi 原生加载 .ts，无需构建步骤）；tsc 仅是开发期类型检查，非运行时依赖。
