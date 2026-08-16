@@ -123,6 +123,27 @@ export async function refreshAccessToken(refreshToken: string, signal: AbortSign
   return toCredentials(tokens);
 }
 
+/**
+ * 从 JWT 中提取第一个命中的非空字符串 claim（不验签）。
+ * token 直接来自我们配置的 Keycloak（TLS 通道），且同一 token 本就作为 bearer
+ * 发往网关——这里只是把它的 payload claim 镜像成 header，供网关归因，无伪造面。
+ * 非 JWT / claim 缺失时返回 undefined。
+ */
+export function extractJwtClaim(token: string, claims: string[]): string | undefined {
+  const payloadSeg = token.split(".")[1];
+  if (!payloadSeg) return undefined;
+  try {
+    const payload = JSON.parse(Buffer.from(payloadSeg, "base64url").toString("utf8")) as Record<string, unknown>;
+    for (const claim of claims) {
+      const value = payload[claim];
+      if (typeof value === "string" && value) return value;
+    }
+  } catch {
+    // 非 JWT（opaque token）等场景：静默跳过，不注入
+  }
+  return undefined;
+}
+
 function toCredentials(tokens: TokenResponse): OAuthCredentials {
   if (!tokens.refresh_token) {
     // Keycloak only issues refresh tokens when offline_access scope is granted.

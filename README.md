@@ -53,7 +53,7 @@ cd pi-provider-litellm-oidc && ./install.sh
 /login litellm              # Keycloak Device Flow 登录（任意设备浏览器完成验证）
 /model litellm/kimi-k2.7-code
 /logout litellm             # 清除凭据
-/session-header              # 查看 session 标识注入配置与当前 session id
+/session-header              # 查看 session / customer 标识注入配置与当前 session id
 ```
 
 ## 通用化配置（环境变量）
@@ -88,15 +88,24 @@ pi
 
 > 注意：变量在扩展加载时读取。同一进程内改环境变量需 `/reload`；两套实例并存需要两个 pi 进程或两份扩展副本（改 `LEGACY_PROVIDER_ID` 拷贝目录）。单进程多实例的配置文件化（JSON per-instance）是后续演进方向。
 
-## Session 标识注入（网关聚合）
+## Session / Customer 标识注入（网关聚合与用户归因）
 
-`before_provider_headers` 钩子给**仅本 provider** 的 LLM 请求注入稳定 session 标识（Pi 会话 UUID），便于 LiteLLM 网关侧把同一会话的多次请求（工具调用循环、重试、多 turn）聚合到同一 session。不影响机器上其他 provider 的请求。
+`before_provider_headers` 钩子给**仅本 provider** 的 LLM 请求注入两类标识：
+
+1. **Session 标识**（Pi 会话 UUID）：把同一会话的多次请求（工具调用循环、重试、多 turn）聚合到同一 session。不影响机器上其他 provider 的请求。
 
 默认 header `x-litellm-trace-id` 是 LiteLLM proxy 原生解析链中优先级最高的会话/追踪头（`x-litellm-trace-id` > `x-litellm-session-id` > 任意 `x-<vendor>-session-id`），值会写入 `LiteLLM_SpendLogs.session_id` 列并同步 metadata 的 `trace_id`/`session_id`，Session Logs UI 按它分组，还会向嵌套 MCP/A2A 调用传播；网关侧零配置。注意：早期默认 `x-session-id` 不匹配 LiteLLM 的 `^x-.+-session-id$` 通用正则（缺 vendor 段），会被网关完全忽略，故弃用。
 
+2. **Customer 标识**（用户 email）：默认 header `x-litellm-customer-id`，这是 LiteLLM proxy 的标准 customer/end-user 头（网关零配置即解析），值写入 SpendLogs 的 customer 维度；配合网关侧 `user_header_mappings`（映射用户属性）与 `extra_spend_tag_headers`（自动打 spend tag）可按用户 email 建用户、聚合个人用量。值取自当前 access token（Keycloak 签发的 JWT）的 `email` claim——`ctx.modelRegistry.getApiKeyForProvider()` 返回框架管理的最新 token（过期时框架先刷新），本地 base64url 解 payload 取 claim，不验签（同一 token 本就作为 bearer 发往网关，只是镜像一个 claim）；token 非 JWT、claim 缺失或未登录时跳过注入，不影响请求。
+
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `LITELLM_SESSION_HEADER` | `x-litellm-trace-id` | 注入的 header 名；显式设为空字符串可禁用注入 |
+| `LITELLM_CUSTOMER_HEADER` | `x-litellm-customer-id` | customer 标识 header 名；显式设为空字符串可禁用注入 |
+| `LITELLM_CUSTOMER_CLAIM` | `email` | 依次尝试的 JWT claim 名，逗号分隔可配回退链，如 `email,preferred_username` |
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `LITELLM_SESSION_HEADER` | `x-litellm-trace-id` | session 标识 header 名；显式设为空字符串可禁用注入 |
 | `LITELLM_SESSION_PREFIX` | （空） | 可选前缀，例如 `pi-`；LiteLLM 要求值为 `^[a-zA-Z0-9_-]{8,}$`，前缀含 `.`/`:` 等字符会使 header 被网关丢弃 |
 | `LITELLM_SESSION_CLIENT_HEADER` | （空） | 可选第二个 header 名（值固定 `pi`），用于网关侧客户端归因；不设置则不发送 |
 
@@ -105,7 +114,7 @@ pi
 - 重试复用相同 headers，钩子不会重复触发，session id 保持一致
 - `/fork`、`/clone` 生成新 session 文件与新 UUID（合理语义）；子代理与主会话共享同一 id
 - `/new` 或 pi 重启后 id 变化；`pi -c` / `--session` 恢复会话保持原 id
-- 上述 header 解析链于 2026-03 上游合入（PR #22626 起），网关版本较旧时 header 不被解析（注入无害但无聚合效果），需网关侧重升级
+- 上述 header 解析链于 2026-03 上游合入（PR #22626 起），网关版本较旧时 header 不被解析（注入无害但无聚合效果），需网关侧重升级；`x-litellm-customer-id`/`x-litellm-end-user-id` 为标准 customer 头，官方文档标注"always checked without any configuration"，解析不依赖该新版本链
 
 > 迁移自全局扩展 `~/.pi/agent/extensions/session-id-header.ts`（原 `PI_SESSION_*` 变量）：合并后请删除旧全局扩展，避免双重注入；配置变量已改为 `LITELLM_SESSION_*`。若网关侧已按旧 header 名 `x-session-id` 建立了聚合逻辑，可设 `LITELLM_SESSION_HEADER=x-session-id` 保持旧行为。
 

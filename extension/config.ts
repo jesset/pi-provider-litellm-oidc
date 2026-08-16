@@ -41,6 +41,26 @@ export const sessionConfig = {
   clientHeader: env("LITELLM_SESSION_CLIENT_HEADER", ""),
 };
 
+/**
+ * Customer（终端用户）标识注入（网关侧按用户维度归因 spend）。
+ * 默认 "x-litellm-customer-id"：LiteLLM proxy 的标准 customer/end-user 头，网关零配置
+ * 即解析（Always checked without any configuration），值写入 SpendLogs 的 customer 维度；
+ * 配合网关侧 user_header_mappings / extra_spend_tag_headers 可按用户 email 建用户、打 spend tag。
+ * 值取自 Keycloak 签发的 access token（JWT）的 claim（默认 email，可用逗号分隔配置回退链）。
+ * LITELLM_CUSTOMER_HEADER 显式设为空字符串可禁用注入（语义同 LITELLM_SESSION_HEADER）。
+ */
+const customerHeaderRaw = process.env.LITELLM_CUSTOMER_HEADER;
+
+export const customerConfig = {
+  /** 注入的 header 名；空字符串表示禁用 */
+  header: customerHeaderRaw === undefined ? "x-litellm-customer-id" : customerHeaderRaw.trim(),
+  /** 依次尝试的 JWT claim 名，默认 ["email"]；可配 "email,preferred_username" 等回退链 */
+  claims: env("LITELLM_CUSTOMER_CLAIM", "email")
+    .split(",")
+    .map((c) => c.trim())
+    .filter(Boolean),
+};
+
 export const keycloak = {
   deviceEndpoint: `${config.keycloakBaseUrl}/realms/${config.keycloakRealm}/protocol/openid-connect/auth/device`,
   tokenEndpoint: `${config.keycloakBaseUrl}/realms/${config.keycloakRealm}/protocol/openid-connect/token`,
