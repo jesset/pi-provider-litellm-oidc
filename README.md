@@ -141,7 +141,7 @@ pi
 ## 已知限制
 
 - Keycloak access token 默认 5 分钟有效期，刷新完全依赖 Pi 的 5 分钟缓冲窗口；offline refresh token 失效后 Pi 提示重新 `/login`
-- `reasoning: true` 按模型名前缀推断（claude-/kimi-/glm-/deepseek-），非 thinking 模型若被误判可调整 models.ts 的 `REASONING_MODEL_PATTERN`
+- `reasoning: true` 按模型名前缀推断（claude-/kimi-/glm-/zai\/glm-/deepseek-），非 thinking 模型若被误判可调整 models.ts 的 `REASONING_MODEL_PATTERN`
 - LiteLLM 网关需暴露 Anthropic 协议端点（`/v1/messages`）且 JWT claims 含 `preferred_username`/`email`（`litellm_jwtauth` 字段映射）
 
 ## 开发
