@@ -1,0 +1,136 @@
+import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
+import { config, keycloak } from "./config.ts";
+
+interface DeviceAuthorizationResponse {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  verification_uri_complete?: string;
+  interval?: number;
+  expires_in?: number;
+}
+
+interface TokenResponse {
+  access_token: string;
+  refresh_token?: string;
+  expires_in: number;
+  error?: string;
+  error_description?: string;
+}
+
+async function postForm(url: string, params: Record<string, string>, signal?: AbortSignal): Promise<TokenResponse> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(params).toString(),
+    signal,
+  });
+  const payload = (await response.json()) as TokenResponse;
+  if (!response.ok) {
+    const detail = payload.error_description ?? payload.error ?? `HTTP ${response.status}`;
+    throw new Error(`Keycloak ${url.split("/").pop()}: ${detail}`);
+  }
+  return payload;
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(signal.reason ?? new Error("aborted"));
+      },
+      { once: true },
+    );
+  });
+}
+
+/** RFC 8628 Device Authorization Flow against Keycloak. */
+export async function loginDeviceFlow(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+  const signal = callbacks.signal;
+
+  const deviceRes = await fetch(keycloak.deviceEndpoint, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: config.keycloakClientId, scope: config.keycloakScope }).toString(),
+    signal,
+  });
+  const device = (await deviceRes.json()) as DeviceAuthorizationResponse;
+  if (!deviceRes.ok || !device.device_code || !device.user_code) {
+    const detail = (device as { error_description?: string; error?: string }).error_description
+      ?? (device as { error?: string }).error
+      ?? `HTTP ${deviceRes.status}`;
+    throw new Error(`Keycloak device authorization failed: ${detail}`);
+  }
+
+  callbacks.onDeviceCode({
+    userCode: device.user_code,
+    verificationUri: device.verification_uri_complete ?? device.verification_uri,
+    intervalSeconds: device.interval ?? 5,
+    expiresInSeconds: device.expires_in ?? 600,
+  });
+
+  let intervalMs = (device.interval ?? 5) * 1000;
+  const deadline = Date.now() + (device.expires_in ?? 600) * 1000;
+
+  while (Date.now() < deadline) {
+    await sleep(intervalMs, signal);
+    signal?.throwIfAborted();
+
+    const poll = await postForm(
+      keycloak.tokenEndpoint,
+      {
+        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+        client_id: config.keycloakClientId,
+        device_code: device.device_code,
+      },
+      signal,
+    ).catch((err: unknown) => {
+      if ((err as Error).name === "AbortError") throw err;
+      // 非 JSON 响应等网络层错误按 pending 处理，下轮重试
+      return { access_token: "", expires_in: 0, error: "authorization_pending" } as TokenResponse;
+    });
+
+    if (poll.access_token) {
+      return toCredentials(poll);
+    }
+    if (poll.error === "authorization_pending") continue;
+    if (poll.error === "slow_down") {
+      intervalMs += 5000;
+      continue;
+    }
+    throw new Error(`Keycloak device flow ended: ${poll.error_description ?? poll.error}`);
+  }
+
+  throw new Error("Device code expired before verification completed. Run /login again.");
+}
+
+/** RFC 6749 refresh_token grant. Keycloak rotates refresh tokens; the new one must be persisted. */
+export async function refreshAccessToken(refreshToken: string, signal: AbortSignal): Promise<OAuthCredentials> {
+  signal.throwIfAborted();
+  const tokens = await postForm(
+    keycloak.tokenEndpoint,
+    {
+      grant_type: "refresh_token",
+      client_id: config.keycloakClientId,
+      refresh_token: refreshToken,
+      scope: config.keycloakScope,
+    },
+    signal,
+  );
+  return toCredentials(tokens);
+}
+
+function toCredentials(tokens: TokenResponse): OAuthCredentials {
+  if (!tokens.refresh_token) {
+    // Keycloak only issues refresh tokens when offline_access scope is granted.
+    throw new Error("Keycloak response missing refresh_token — check that the client scope offline_access is enabled");
+  }
+  return {
+    refresh: tokens.refresh_token,
+    access: tokens.access_token,
+    expires: Date.now() + tokens.expires_in * 1000,
+  };
+}
