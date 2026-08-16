@@ -1,4 +1,4 @@
-# pi-provider-litellm
+# pi-provider-litellm-oidc
 
 Pi coding agent 通过 Keycloak OIDC 免配置（keyless）接入 LiteLLM 网关的 provider 扩展，无需任何静态 API Key。
 
@@ -33,7 +33,7 @@ LiteLLM 网关 (enable_jwt_auth + JWKS 指向 Keycloak，网关侧零改动)
 pi install git:github.com/jesset/pi-provider-litellm-oidc.git@v0.1.0
 
 # npm 源（发布到内网 registry 后）
-pi install npm:pi-provider-litellm
+pi install npm:pi-provider-litellm-oidc
 
 # 本地路径（开发/单机）
 cd pi-provider-litellm-oidc && ./install.sh
