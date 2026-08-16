@@ -20,6 +20,22 @@ export const config = {
   keycloakScope: env("LEGACY_KEYCLOAK_SCOPE", "openid profile email offline_access"),
 };
 
+/**
+ * Session 标识注入（网关侧会话聚合）。
+ * header 名默认 "x-session-id"；LITELLM_SESSION_HEADER 显式设为空字符串可禁用注入
+ * （不能用 env()：它对空值回退 fallback，会吞掉“显式禁用”语义）。
+ */
+const sessionHeaderRaw = process.env.LITELLM_SESSION_HEADER;
+
+export const sessionConfig = {
+  /** 注入的 header 名；空字符串表示禁用 */
+  header: sessionHeaderRaw === undefined ? "x-session-id" : sessionHeaderRaw.trim(),
+  /** 可选前缀，例如 "pi-"，便于网关区分请求来源 */
+  prefix: env("LITELLM_SESSION_PREFIX", ""),
+  /** 可选的第二个 header 名（值固定 "pi"），用于网关侧客户端归因；默认不发送 */
+  clientHeader: env("LITELLM_SESSION_CLIENT_HEADER", ""),
+};
+
 export const keycloak = {
   deviceEndpoint: `${config.keycloakBaseUrl}/realms/${config.keycloakRealm}/protocol/openid-connect/auth/device`,
   tokenEndpoint: `${config.keycloakBaseUrl}/realms/${config.keycloakRealm}/protocol/openid-connect/token`,

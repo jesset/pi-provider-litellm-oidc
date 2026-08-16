@@ -53,6 +53,7 @@ cd pi-provider-litellm-oidc && ./install.sh
 /login litellm              # Keycloak Device Flow 登录（任意设备浏览器完成验证）
 /model litellm/kimi-k2.7-code
 /logout litellm             # 清除凭据
+/session-header              # 查看 session 标识注入配置与当前 session id
 ```
 
 ## 通用化配置（环境变量）
@@ -86,6 +87,24 @@ pi
 ```
 
 > 注意：变量在扩展加载时读取。同一进程内改环境变量需 `/reload`；两套实例并存需要两个 pi 进程或两份扩展副本（改 `LEGACY_PROVIDER_ID` 拷贝目录）。单进程多实例的配置文件化（JSON per-instance）是后续演进方向。
+
+## Session 标识注入（网关聚合）
+
+`before_provider_headers` 钩子给**仅本 provider** 的 LLM 请求注入稳定 session 标识（Pi 会话 UUID），便于 LiteLLM 网关侧把同一会话的多次请求（工具调用循环、重试、多 turn）聚合到同一 session。不影响机器上其他 provider 的请求。
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `LITELLM_SESSION_HEADER` | `x-session-id` | 注入的 header 名；显式设为空字符串可禁用注入 |
+| `LITELLM_SESSION_PREFIX` | （空） | 可选前缀，例如 `pi-`，便于网关区分请求来源 |
+| `LITELLM_SESSION_CLIENT_HEADER` | （空） | 可选第二个 header 名（值固定 `pi`），用于网关侧客户端归因；不设置则不发送 |
+
+行为要点：
+
+- 重试复用相同 headers，钩子不会重复触发，session id 保持一致
+- `/fork`、`/clone` 生成新 session 文件与新 UUID（合理语义）；子代理与主会话共享同一 id
+- `/new` 或 pi 重启后 id 变化；`pi -c` / `--session` 恢复会话保持原 id
+
+> 迁移自全局扩展 `~/.pi/agent/extensions/session-id-header.ts`（原 `PI_SESSION_*` 变量）：合并后请删除旧全局扩展，避免双重注入；配置变量已改为 `LITELLM_SESSION_*`。
 
 ## 模型列表策略
 
