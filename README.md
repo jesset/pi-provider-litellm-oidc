@@ -29,8 +29,8 @@ LiteLLM 网关 (enable_jwt_auth + JWKS 指向 Keycloak，网关侧零改动)
 ### 方式 A：pi install（推荐）
 
 ```bash
-# git 源（本仓库）
-pi install git:github.com/jesset/pi-provider-litellm-oidc.git@v0.1.0
+# git 源（本仓库；注意 scp 简写必须带 git@，否则 Pi 会当作本地路径）
+pi install git:git@github.com/jesset/pi-provider-litellm-oidc.git@v0.1.0
 
 # npm 源（发布到内网 registry 后）
 pi install npm:pi-provider-litellm-oidc
