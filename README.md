@@ -92,10 +92,12 @@ pi
 
 `before_provider_headers` 钩子给**仅本 provider** 的 LLM 请求注入稳定 session 标识（Pi 会话 UUID），便于 LiteLLM 网关侧把同一会话的多次请求（工具调用循环、重试、多 turn）聚合到同一 session。不影响机器上其他 provider 的请求。
 
+默认 header `x-litellm-trace-id` 是 LiteLLM proxy 原生解析链中优先级最高的会话/追踪头（`x-litellm-trace-id` > `x-litellm-session-id` > 任意 `x-<vendor>-session-id`），值会写入 `LiteLLM_SpendLogs.session_id` 列并同步 metadata 的 `trace_id`/`session_id`，Session Logs UI 按它分组，还会向嵌套 MCP/A2A 调用传播；网关侧零配置。注意：早期默认 `x-session-id` 不匹配 LiteLLM 的 `^x-.+-session-id$` 通用正则（缺 vendor 段），会被网关完全忽略，故弃用。
+
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `LITELLM_SESSION_HEADER` | `x-session-id` | 注入的 header 名；显式设为空字符串可禁用注入 |
-| `LITELLM_SESSION_PREFIX` | （空） | 可选前缀，例如 `pi-`，便于网关区分请求来源 |
+| `LITELLM_SESSION_HEADER` | `x-litellm-trace-id` | 注入的 header 名；显式设为空字符串可禁用注入 |
+| `LITELLM_SESSION_PREFIX` | （空） | 可选前缀，例如 `pi-`；LiteLLM 要求值为 `^[a-zA-Z0-9_-]{8,}$`，前缀含 `.`/`:` 等字符会使 header 被网关丢弃 |
 | `LITELLM_SESSION_CLIENT_HEADER` | （空） | 可选第二个 header 名（值固定 `pi`），用于网关侧客户端归因；不设置则不发送 |
 
 行为要点：
@@ -103,8 +105,9 @@ pi
 - 重试复用相同 headers，钩子不会重复触发，session id 保持一致
 - `/fork`、`/clone` 生成新 session 文件与新 UUID（合理语义）；子代理与主会话共享同一 id
 - `/new` 或 pi 重启后 id 变化；`pi -c` / `--session` 恢复会话保持原 id
+- 上述 header 解析链于 2026-03 上游合入（PR #22626 起），网关版本较旧时 header 不被解析（注入无害但无聚合效果），需网关侧重升级
 
-> 迁移自全局扩展 `~/.pi/agent/extensions/session-id-header.ts`（原 `PI_SESSION_*` 变量）：合并后请删除旧全局扩展，避免双重注入；配置变量已改为 `LITELLM_SESSION_*`。
+> 迁移自全局扩展 `~/.pi/agent/extensions/session-id-header.ts`（原 `PI_SESSION_*` 变量）：合并后请删除旧全局扩展，避免双重注入；配置变量已改为 `LITELLM_SESSION_*`。若网关侧已按旧 header 名 `x-session-id` 建立了聚合逻辑，可设 `LITELLM_SESSION_HEADER=x-session-id` 保持旧行为。
 
 ## 模型列表策略
 

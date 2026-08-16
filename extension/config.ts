@@ -22,15 +22,20 @@ export const config = {
 
 /**
  * Session 标识注入（网关侧会话聚合）。
- * header 名默认 "x-session-id"；LITELLM_SESSION_HEADER 显式设为空字符串可禁用注入
+ * 默认 "x-litellm-trace-id"：LiteLLM proxy 原生解析链中优先级最高的会话/追踪头，
+ * 值会写入 LiteLLM_SpendLogs.session_id 列并同步 trace_id/session_id metadata，
+ * Session Logs UI 按它分组；旧的 "x-session-id" 不匹配 LiteLLM 的
+ * `^x-.+-session-id$` 通用正则（缺 vendor 段），会被网关完全忽略。
+ * LITELLM_SESSION_HEADER 显式设为空字符串可禁用注入
  * （不能用 env()：它对空值回退 fallback，会吞掉“显式禁用”语义）。
  */
 const sessionHeaderRaw = process.env.LITELLM_SESSION_HEADER;
 
 export const sessionConfig = {
   /** 注入的 header 名；空字符串表示禁用 */
-  header: sessionHeaderRaw === undefined ? "x-session-id" : sessionHeaderRaw.trim(),
-  /** 可选前缀，例如 "pi-"，便于网关区分请求来源 */
+  header: sessionHeaderRaw === undefined ? "x-litellm-trace-id" : sessionHeaderRaw.trim(),
+  /** 可选前缀，例如 "pi-"。注意：LiteLLM 校验值为 ^[a-zA-Z0-9_-]{8,}$，
+   *  前缀含 . / : 等字符会使整个 header 被网关丢弃，建议只用字母数字与 - _ */
   prefix: env("LITELLM_SESSION_PREFIX", ""),
   /** 可选的第二个 header 名（值固定 "pi"），用于网关侧客户端归因；默认不发送 */
   clientHeader: env("LITELLM_SESSION_CLIENT_HEADER", ""),
