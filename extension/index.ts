@@ -1,8 +1,8 @@
 import type { ExtensionAPI, ProviderConfig, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
-import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
+import type { ModelsStoreEntry, OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
 import { config, customerConfig, sessionConfig } from "./config.ts";
 import { extractJwtClaim, loginDeviceFlow, refreshAccessToken } from "./keycloak.ts";
-import { fallbackModels, fetchGatewayModels } from "./models.ts";
+import { fallbackModels, fetchGatewayModels, storedModels } from "./models.ts";
 
 const oauth: NonNullable<ProviderConfig["oauth"]> = {
   name: `${config.displayName} (Keycloak SSO)`,
@@ -20,6 +20,17 @@ const oauth: NonNullable<ProviderConfig["oauth"]> = {
   },
 };
 
+/** 大小写不敏感地取请求头中的 Bearer token；无 authorization 头或空值时返回 undefined。 */
+function bearerToken(headers: Record<string, string | null>): string | undefined {
+  for (const [name, value] of Object.entries(headers)) {
+    if (name.toLowerCase() === "authorization" && value) {
+      const token = value.trim().replace(/^Bearer\s+/i, "");
+      return token || undefined;
+    }
+  }
+  return undefined;
+}
+
 export default async function (pi: ExtensionAPI): Promise<void> {
   pi.registerProvider(config.providerId, {
     name: config.displayName,
@@ -29,11 +40,24 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     models: fallbackModels(),
     oauth,
     async refreshModels(context): Promise<ProviderModelConfig[]> {
+      // 框架两阶段刷新协议：allowNetwork=false 是离线缓存恢复阶段（扩展注册、
+      // 每次 refresh 的 phase 1），契约禁止网络访问——只回落持久化目录或静态列表。
+      if (!context.allowNetwork) {
+        return storedModels(context.stored) ?? fallbackModels();
+      }
       // OAuth credentials are refreshed by the framework before reaching here.
       const credential = context.credential;
       const bearer = credential?.type === "oauth" ? credential.access : undefined;
       if (!bearer) return fallbackModels();
-      return (await fetchGatewayModels(bearer)) ?? fallbackModels();
+      const fetched = await fetchGatewayModels(bearer, context.signal);
+      if (fetched) {
+        // 持久化目录（models-store.json），供下次离线阶段恢复真实模型列表；
+        // publish 由框架按 generation 检查后落盘，中止时安全丢弃
+        const entry = { models: fetched, checkedAt: Date.now() } as unknown as ModelsStoreEntry;
+        await context.publish({ persist: entry });
+        return fetched;
+      }
+      return storedModels(context.stored) ?? fallbackModels();
     },
   });
 
@@ -59,9 +83,12 @@ export default async function (pi: ExtensionAPI): Promise<void> {
     }
 
     if (customerConfig.header) {
-      // getApiKeyForProvider 返回框架管理的当前 access token（过期时框架先刷新，
-      // 未登录返回 undefined，不会触发交互式登录）
-      const bearer = await ctx.modelRegistry.getApiKeyForProvider(config.providerId);
+      // authHeader: true 时框架（provider-composer 的 withConfiguredAuth）已把
+      // Authorization: Bearer <access> 写入最终请求头；直接从 event.headers 取
+      // token 解 claim——与实际发送的 token 严格同源，且免去每请求一次冗余的
+      // getApiKeyForProvider 全量 auth 解析（含 auth.json stat 与锁路径）。
+      // 未登录时无此 header，自然跳过；非 JWT / claim 缺失时静默不注入。
+      const bearer = bearerToken(event.headers);
       const customerId = bearer ? extractJwtClaim(bearer, customerConfig.claims) : undefined;
       if (customerId) {
         event.headers[customerConfig.header] = customerId;

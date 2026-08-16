@@ -96,7 +96,7 @@ pi
 
 默认 header `x-litellm-trace-id` 是 LiteLLM proxy 原生解析链中优先级最高的会话/追踪头（`x-litellm-trace-id` > `x-litellm-session-id` > 任意 `x-<vendor>-session-id`），值会写入 `LiteLLM_SpendLogs.session_id` 列并同步 metadata 的 `trace_id`/`session_id`，Session Logs UI 按它分组，还会向嵌套 MCP/A2A 调用传播；网关侧零配置。注意：早期默认 `x-session-id` 不匹配 LiteLLM 的 `^x-.+-session-id$` 通用正则（缺 vendor 段），会被网关完全忽略，故弃用。
 
-2. **Customer 标识**（用户 email）：默认 header `x-litellm-customer-id`，这是 LiteLLM proxy 的标准 customer/end-user 头（网关零配置即解析），值写入 SpendLogs 的 customer 维度；配合网关侧 `user_header_mappings`（映射用户属性）与 `extra_spend_tag_headers`（自动打 spend tag）可按用户 email 建用户、聚合个人用量。值取自当前 access token（Keycloak 签发的 JWT）的 `email` claim——`ctx.modelRegistry.getApiKeyForProvider()` 返回框架管理的最新 token（过期时框架先刷新），本地 base64url 解 payload 取 claim，不验签（同一 token 本就作为 bearer 发往网关，只是镜像一个 claim）；token 非 JWT、claim 缺失或未登录时跳过注入，不影响请求。
+2. **Customer 标识**（用户 email）：默认 header `x-litellm-customer-id`，这是 LiteLLM proxy 的标准 customer/end-user 头（网关零配置即解析），值写入 SpendLogs 的 customer 维度；配合网关侧 `user_header_mappings`（映射用户属性）与 `extra_spend_tag_headers`（自动打 spend tag）可按用户 email 建用户、聚合个人用量。值直接取自框架已写入最终请求头的 `Authorization: Bearer <token>`（与实际发送的 token 严格同源，大小写不敏感解析），本地 base64url 解 JWT payload 取 `email` claim，不验签（同一 token 本就作为 bearer 发往网关，只是镜像一个 claim）；token 非 JWT、claim 缺失或未登录时跳过注入，不影响请求。
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
@@ -121,8 +121,9 @@ pi
 ## 模型列表策略
 
 - 启动时注册静态 fallback 列表（10 个常用 chat 模型）
-- `refreshModels` 从 `context.credential` 取已刷新的 access token 调 `/v1/models`，过滤 `mode=chat`、剔除 `-openai` 后缀与 `staging/` 前缀项（这些走 OpenAI 协议腿，anthropic-messages api 调不通）
-- 未登录或拉取失败时回退 fallback 列表
+- 网络刷新成功的目录经 `context.publish({ persist })` 持久化到 `~/.pi/agent/models-store.json`，之后离线启动直接恢复真实目录，不再请求网关
+- `refreshModels` 遵守框架两阶段刷新协议：`allowNetwork=false`（扩展注册、每次 refresh 的 phase 1）零网络请求；网络阶段从 `context.credential` 取已刷新的 access token 调 `/v1/models`（尊重框架 abort signal 与本地 15s 超时），过滤 `mode=chat`、剔除 `-openai` 后缀与 `staging/` 前缀项（这些走 OpenAI 协议腿，anthropic-messages api 调不通）
+- 未登录或拉取失败时回退 持久化目录 ?? fallback 列表
 
 ## 验证行为说明
 

@@ -1,3 +1,4 @@
+import type { ModelsStoreEntry } from "@earendil-works/pi-ai";
 import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import { modelsEndpoint } from "./config.ts";
 
@@ -36,12 +37,15 @@ export function fallbackModels(): ProviderModelConfig[] {
   return FALLBACK_MODELS;
 }
 
-/** Fetch chat models from the gateway. Returns null on auth failure or network error. */
-export async function fetchGatewayModels(bearerToken: string): Promise<ProviderModelConfig[] | null> {
+/** Fetch chat models from the gateway. Returns null on auth failure, network error, or abort. */
+export async function fetchGatewayModels(bearerToken: string, signal?: AbortSignal): Promise<ProviderModelConfig[] | null> {
   try {
+    // 15s 本地超时；传入框架共享 abort signal 时任一触发即取消
+    // （框架侧取消——如登录后目录刷新超时——应立即中断，而非占用 socket 到本地超时）
+    const timeout = AbortSignal.timeout(15000);
     const response = await fetch(modelsEndpoint, {
       headers: { authorization: `Bearer ${bearerToken}` },
-      signal: AbortSignal.timeout(15000),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     });
     if (!response.ok) return null;
 
@@ -63,4 +67,15 @@ export async function fetchGatewayModels(bearerToken: string): Promise<ProviderM
   } catch {
     return null;
   }
+}
+
+/**
+ * 从持久化目录条目（models-store.json，由本扩展网络刷新成功时 publish 的
+ * persist 写入）恢复模型列表，供离线阶段与网络失败时回落，避免退回静态列表。
+ * 条目运行时形状即 ProviderModelConfig[]，Model -> ProviderModelConfig 为结构子集。
+ */
+export function storedModels(stored: Readonly<ModelsStoreEntry> | undefined): ProviderModelConfig[] | undefined {
+  const models = stored?.models;
+  if (!models || models.length === 0) return undefined;
+  return models.slice() as ProviderModelConfig[];
 }

@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
 import { config, keycloak } from "./config.ts";
 
@@ -18,6 +19,23 @@ interface TokenResponse {
   error_description?: string;
 }
 
+/**
+ * Keycloak 按 RFC 8628 对 authorization_pending / slow_down / access_denied /
+ * expired_token 等一律返回 4xx + JSON error body。postForm 把可解析的 error body
+ * 附在 OAuthHttpError 上抛出，由调用方按 OAuth 语义分类（如设备流轮询）；
+ * 只有 fetch / JSON 解析层的异常才被调用方当作 transient 容错重试。
+ */
+class OAuthHttpError extends Error {
+  readonly payload: TokenResponse;
+
+  constructor(url: string, status: number, payload: TokenResponse) {
+    const detail = payload.error_description ?? payload.error ?? `HTTP ${status}`;
+    super(`Keycloak ${url.split("/").pop()}: ${detail}`);
+    this.name = "OAuthHttpError";
+    this.payload = payload;
+  }
+}
+
 async function postForm(url: string, params: Record<string, string>, signal?: AbortSignal): Promise<TokenResponse> {
   const response = await fetch(url, {
     method: "POST",
@@ -26,25 +44,8 @@ async function postForm(url: string, params: Record<string, string>, signal?: Ab
     signal,
   });
   const payload = (await response.json()) as TokenResponse;
-  if (!response.ok) {
-    const detail = payload.error_description ?? payload.error ?? `HTTP ${response.status}`;
-    throw new Error(`Keycloak ${url.split("/").pop()}: ${detail}`);
-  }
+  if (!response.ok) throw new OAuthHttpError(url, response.status, payload);
   return payload;
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        reject(signal.reason ?? new Error("aborted"));
-      },
-      { once: true },
-    );
-  });
 }
 
 /** RFC 8628 Device Authorization Flow against Keycloak. */
@@ -76,7 +77,7 @@ export async function loginDeviceFlow(callbacks: OAuthLoginCallbacks): Promise<O
   const deadline = Date.now() + (device.expires_in ?? 600) * 1000;
 
   while (Date.now() < deadline) {
-    await sleep(intervalMs, signal);
+    await sleep(intervalMs, undefined, { signal });
     signal?.throwIfAborted();
 
     const poll = await postForm(
@@ -89,7 +90,10 @@ export async function loginDeviceFlow(callbacks: OAuthLoginCallbacks): Promise<O
       signal,
     ).catch((err: unknown) => {
       if ((err as Error).name === "AbortError") throw err;
-      // 非 JSON 响应等网络层错误按 pending 处理，下轮重试
+      // HTTP 层错误（含 slow_down / access_denied / expired_token 等 OAuth error）
+      // 原样交给下方分类逻辑，避免 fail-slow（如用户拒绝授权后空转到超时）；
+      // 仅网络 / 非 JSON 响应等传输层异常按 pending 容错，下轮重试
+      if (err instanceof OAuthHttpError) return err.payload;
       return { access_token: "", expires_in: 0, error: "authorization_pending" } as TokenResponse;
     });
 
