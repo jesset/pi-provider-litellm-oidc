@@ -66,4 +66,10 @@ export const keycloak = {
   tokenEndpoint: `${config.keycloakBaseUrl}/realms/${config.keycloakRealm}/protocol/openid-connect/token`,
 };
 
-export const modelsEndpoint = `${config.gatewayBaseUrl}/v1/models`;
+/**
+ * 模型目录数据源用 /model/info 而非 /v1/models：返回 deployment 级 DB 实配值
+ * （token limits、supports_vision、mode），而 /v1/models 的这些字段来自 LiteLLM
+ * 静态 cost map 按公开名查找，自研/别名模型一律缺失。需网关将其列入
+ * public_routes（LiteLLM 网关已配置，用户 JWT 可访问）。
+ */
+export const modelInfoEndpoint = `${config.gatewayBaseUrl}/model/info`;

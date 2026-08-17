@@ -30,7 +30,7 @@ LiteLLM 网关 (enable_jwt_auth + JWKS 指向 Keycloak，网关侧零改动)
 
 ```bash
 # git 源（本仓库；注意 scp 简写必须带 git@，否则 Pi 会当作本地路径）
-pi install git:git@github.com/jesset/pi-provider-litellm-oidc.git@v0.4.0
+pi install git:git@github.com/jesset/pi-provider-litellm-oidc.git@v0.4.1
 
 # npm 源（发布到内网 registry 后）
 pi install npm:pi-provider-litellm-oidc
@@ -122,9 +122,11 @@ pi
 
 ## 模型列表策略
 
-- 启动时注册静态 fallback 列表（10 个常用 chat 模型）
+- 启动时注册静态 fallback 列表（11 个常用 chat 模型）
 - 网络刷新成功的目录经 `context.publish({ persist })` 持久化到 `~/.pi/agent/models-store.json`，之后离线启动直接恢复真实目录，不再请求网关
-- `refreshModels` 遵守框架两阶段刷新协议：`allowNetwork=false`（扩展注册、每次 refresh 的 phase 1）零网络请求；网络阶段从 `context.credential` 取已刷新的 access token 调 `/v1/models`（尊重框架 abort signal 与本地 15s 超时），过滤 `mode=chat`、剔除 `-openai` 后缀与 `staging/` 前缀项（这些走 OpenAI 协议腿，anthropic-messages api 调不通）
+- `refreshModels` 遵守框架两阶段刷新协议：`allowNetwork=false`（扩展注册、每次 refresh 的 phase 1）零网络请求；网络阶段从 `context.credential` 取已刷新的 access token 调 `/model/info`（尊重框架 abort signal 与本地 15s 超时）
+- 数据源用 `/model/info` 而非 `/v1/models`：前者返回 deployment 级 DB 实配值（token limits、`supports_vision`、mode），后者的这些字段来自 LiteLLM 静态 cost map 按公开模型名查找——自研/别名模型（如 `kimi-k2.7-code`）一律缺失，会被误滤掉。要求网关把 `/model/info` 列入 `public_routes`（用户 JWT 可访问）
+- 过滤规则：剔除 `mode` 显式为 embedding/rerank/image_generation 的条目（mode 缺失是自研模型常态，不据此排除）；隐藏 `staging/` 前缀（网关内部命名空间）与 `-openai` 后缀（OpenAI 协议腿孪生，与 anthropic 腿重复）的内部条目；同名多 deployment 聚合为一条（字段取首个非空值）；`input` 按 `supports_vision` 决定是否含 image（未声明按纯文本，向非多模态后端发图会 500）
 - 未登录或拉取失败时回退 持久化目录 ?? fallback 列表
 
 ## 验证行为说明
@@ -141,8 +143,9 @@ pi
 ## 已知限制
 
 - Keycloak access token 默认 5 分钟有效期，刷新完全依赖 Pi 的 5 分钟缓冲窗口；offline refresh token 失效后 Pi 提示重新 `/login`
-- `reasoning: true` 按模型名前缀推断（claude-/kimi-/glm-/zai\/glm-/deepseek-），非 thinking 模型若被误判可调整 models.ts 的 `REASONING_MODEL_PATTERN`
+- `reasoning: true` 按模型名前缀推断（claude-/kimi- 或 kimi\/、glm-/zai\/glm-/deepseek-/k3/llm-），非 thinking 模型若被误判可调整 models.ts 的 `REASONING_MODEL_PATTERN`
 - LiteLLM 网关需暴露 Anthropic 协议端点（`/v1/messages`）且 JWT claims 含 `preferred_username`/`email`（`litellm_jwtauth` 字段映射）
+- 模型目录拉取需网关将 `/model/info` 列入 `public_routes`（默认 LiteLLM 配置中它是 admin 端点；未配置时网络刷新失败，回退静态列表）
 
 ## 开发
 

@@ -5,7 +5,14 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵守 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.4.1] - 2026-08-17
+
+### 变更
+
+- 模型目录数据源由 `/v1/models` 切换为 `/model/info`（需网关将其列入 `public_routes`）：前者的 mode/max_tokens 来自 LiteLLM 静态 cost map 按公开名查找，自研/别名模型（如 `kimi-k2.7-code`）一律缺失，`mode=chat` 白名单误滤了网关上 34 个模型中的 24 个（含实际可对话模型）；后者返回 deployment 级 DB 实配值
+- 过滤规则改为 mode 黑名单（embedding/rerank/image_generation）+ 隐藏 `staging/` 与 `-openai` 内部条目；同名多 deployment 聚合；`input` 按 `supports_vision` 判定（未声明按纯文本，避免向非多模态后端发图 500）
+- fallback 静态列表参数按网关 DB 实配校准（claude 系输出上限 128000→131072、kimi-k2.7-code contextWindow 262144→200000、sonnet 系标明图片支持、其余非多模态模型移除 image）
+- `reasoning` 前缀匹配补充 `kimi/`、`k3`、`llm-` 形式
 
 ### 修复
 
