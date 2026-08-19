@@ -5,6 +5,12 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵守 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.5.1] - 2026-08-19
+
+### 修复
+
+- `prepare` 钩子由"先失败再兜底"（第一跳 `node build.mjs` 在无 devDeps 时必打 `ERR_MODULE_NOT_FOUND` 堆栈，吓到用户）改为"先探测再构建"（`test -d node_modules/esbuild || npm install ... ; node build.mjs`）——git 源安装与开发安装两条路径均单次构建、无报错输出；CI 发布（`npm ci` 已装 devDeps）同样跳过兜底
+
 ## [0.5.0] - 2026-08-19
 
 ### 变更
