@@ -29,15 +29,24 @@ LiteLLM 网关 (enable_jwt_auth + JWKS 指向 Keycloak，网关侧零改动)
 ### 方式 A：pi install（推荐）
 
 ```bash
-# git 源（本仓库；注意 scp 简写必须带 git@，否则 Pi 会当作本地路径）
-pi install git:git@github.com/jesset/pi-provider-litellm-oidc.git@v0.4.1
+# 一行快速安装（registry 公开，匿名即可；环境变量名含 : 故需 env 包装）
+env npm_config_registry=https://registry.npmjs.org/ \
+  pi install npm:pi-provider-litellm-oidc
 
-# npm 源（发布到内网 registry 后）
+# 或持久配置 ~/.npmrc（实例级 endpoint，scope 路由只影响 @public 前缀包，
+# 对 tech 组下所有 @public/* 包通用；私有部署时需第二行 token）
+#   registry=https://registry.npmjs.org/
+#   //registry.npmjs.org/:_authToken=<个人访问令牌(read_api)>
 pi install npm:pi-provider-litellm-oidc
+
+# git 源（注意 scp 简写必须带 git@，否则 Pi 会当作本地路径）
+pi install git:git@github.com/jesset/pi-provider-litellm-oidc.git@v0.5.1
 
 # 本地路径（开发/单机）
 cd pi-provider-litellm-oidc && ./install.sh
 ```
+
+> git 源安装会在本机 clone 完整源码并经 `prepare` 钩子现场构建 dist（需 Node ≥ 22 与外网可达 npmjs 拉 esbuild）——拿到的是源码，防篡改保护只存在于 npm 通道；对普通用户推荐 npm 方式。
 
 已运行中的 Pi 会话用 `/reload` 热加载。
 
@@ -150,6 +159,10 @@ pi
 ## 开发
 
 ```bash
+# 构建（bundle + minify 产出 dist/index.js；npm install 时 prepare 也会自动构建）
+npm install --no-audit --no-fund
+npm run build
+
 # 类型检查（机器无关写法，详见 CLAUDE.md 开发流程）
 npm install --no-save typescript@5 @types/node@22
 PI_ROOT="$(npm root -g)/@earendil-works/pi-coding-agent"
@@ -160,4 +173,6 @@ ln -sfn "$PI_ROOT/node_modules/@earendil-works/pi-ai" node_modules/@earendil-wor
 rm -rf node_modules
 ```
 
-源码即发布物（Pi 原生加载 .ts，无需构建步骤）；tsc 仅是开发期类型检查，非运行时依赖。
+**构建产物即发布物**：`extension/` 的 TS 源码经 esbuild 打包为单文件 minified `dist/index.js`（`pi.extensions` 指向它）。dist 不进仓库，构建发生在两条路径：**npm 发布**由 CI（`.gitlab-ci.yml`，仅 `v*` tag 触发）构建后 `npm publish` 到 GitLab 组级 npm registry（`@public` scope）；**git 源安装**在本机经 `prepare` 钩子构建（devDeps 未装时 fallback 临时装 pinned esbuild）。TS 源码不进 npm tarball（`files` 仅含 `dist`）。esbuild 仅为 devDependency，运行时仍零依赖。
+
+> 此前（≤ v0.4.1）为"源码即发布物"（Pi 原生加载 .ts）；v0.5.0 起改为 bundle 分发，目的是避免客户端直接阅读/修改源码导致网关侧 header 注入等行为被篡改。注意这只是提高门槛，无法对抗有意绕过（git 源安装路径拿到的仍是完整源码）。
