@@ -5,6 +5,14 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵守 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.5.0] - 2026-08-19
+
+### 变更
+
+- **BREAKING（发布形态）**：发布物由 TS 源码改为 esbuild bundle + minify 的单文件 `dist/index.js`（`pi.extensions` 指向它；`extension/` 源码不再进 npm tarball）。目的：避免客户端直接阅读/修改源码导致网关侧 session/customer header 注入被篡改。注意这只是提高篡改门槛，无法对抗有意绕过
+- 引入构建流程：`npm run build`（esbuild 为 devDependency，运行时仍零依赖）；**`dist/` 构建产物提交进仓库**——pi 的 git/npm 安装只读取文件不执行脚本，改动 `extension/` 后必须 build 并连同 `dist/` 一起提交，否则 git/npm 安装得到旧产物
+- 开发流程相应调整：类型检查前需 `npm install`（装 esbuild），详见 README 开发节
+
 ## [0.4.1] - 2026-08-17
 
 ### 变更

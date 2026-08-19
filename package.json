@@ -1,6 +1,6 @@
 {
   "name": "pi-provider-litellm-oidc",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Keyless OIDC (Keycloak device flow) provider for LiteLLM gateways — pi coding agent extension",
   "type": "module",
   "license": "MIT",
@@ -12,18 +12,24 @@
     "keycloak",
     "keyless"
   ],
+  "scripts": {
+    "build": "node build.mjs"
+  },
   "pi": {
     "extensions": [
-      "./extension/index.ts"
+      "./dist/index.js"
     ]
   },
   "files": [
-    "extension",
+    "dist",
     "README.md",
     "LICENSE"
   ],
   "engines": {
     "node": ">=22"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

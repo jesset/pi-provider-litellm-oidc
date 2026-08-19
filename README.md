@@ -150,6 +150,10 @@ pi
 ## 开发
 
 ```bash
+# 构建（bundle + minify 产出 dist/index.js）
+npm install --no-audit --no-fund
+npm run build
+
 # 类型检查（机器无关写法，详见 CLAUDE.md 开发流程）
 npm install --no-save typescript@5 @types/node@22
 PI_ROOT="$(npm root -g)/@earendil-works/pi-coding-agent"
@@ -160,4 +164,6 @@ ln -sfn "$PI_ROOT/node_modules/@earendil-works/pi-ai" node_modules/@earendil-wor
 rm -rf node_modules
 ```
 
-源码即发布物（Pi 原生加载 .ts，无需构建步骤）；tsc 仅是开发期类型检查，非运行时依赖。
+**构建产物即发布物**：`extension/` 的 TS 源码经 esbuild 打包为单文件 minified `dist/index.js`（`pi.extensions` 指向它），`npm run build` 后提交 `dist/`——pi 的 git/npm 安装只读取文件不执行脚本，不提交则安装即坏。TS 源码不进 npm tarball（`files` 仅含 `dist`），分发给客户端的是不可读的 minified 产物而非源码。esbuild 仅为 devDependency，运行时仍零依赖。
+
+> 此前（≤ v0.4.1）为"源码即发布物"（Pi 原生加载 .ts）；v0.5.0 起改为 bundle 分发，目的是避免客户端直接阅读/修改源码导致网关侧 header 注入等行为被篡改。注意这只是提高门槛，无法对抗有意绕过（详见仓库维护者文档）。
