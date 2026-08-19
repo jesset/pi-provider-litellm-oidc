@@ -9,9 +9,11 @@
 
 ### 变更
 
-- **BREAKING（发布形态）**：发布物由 TS 源码改为 esbuild bundle + minify 的单文件 `dist/index.js`（`pi.extensions` 指向它；`extension/` 源码不再进 npm tarball）。目的：避免客户端直接阅读/修改源码导致网关侧 session/customer header 注入被篡改。注意这只是提高篡改门槛，无法对抗有意绕过
-- 引入构建流程：`npm run build`（esbuild 为 devDependency，运行时仍零依赖）；**`dist/` 构建产物提交进仓库**——pi 的 git/npm 安装只读取文件不执行脚本，改动 `extension/` 后必须 build 并连同 `dist/` 一起提交，否则 git/npm 安装得到旧产物
-- 开发流程相应调整：类型检查前需 `npm install`（装 esbuild），详见 README 开发节
+- **BREAKING（发布形态）**：发布物由 TS 源码改为 esbuild bundle + minify 的单文件 `dist/index.js`（`pi.extensions` 指向它；`extension/` 源码不再进 npm tarball）。目的：避免客户端直接阅读/修改源码导致网关侧 session/customer header 注入被篡改。注意这只是提高篡改门槛，无法对抗有意绕过（git 源安装路径拿到的仍是完整源码）
+- **BREAKING（包名）**：改为 `pi-provider-litellm-oidc`（GitLab 组级 npm registry 分发要求 scope 匹配根命名空间；用户 `.npmrc` 只需 `registry` 一行，不影响其他包的默认 registry）
+- 新增 `.gitlab-ci.yml`：verify job（push/MR 构建 + 语法冒烟）；publish job 仅 `v*` tag 触发，以 CI_JOB_TOKEN 发布到组级 endpoint `npm registry`（后发布者胜出，属可接受行为）
+- `dist/` 不进仓库：npm 发布由 CI 构建后 publish；git 源安装经 `prepare` 钩子在本机构建（fallback 以 `--include=dev` 显式覆盖 npm 传入的 `npm_config_omit=dev` 临时装 pinned esbuild，实测 pi git 安装 `npm install --omit=dev` 场景下可用）
+- 开发流程相应调整：`npm install` 时 prepare 自动构建；类型检查步骤不变，详见 README 开发节
 
 ## [0.4.1] - 2026-08-17
 

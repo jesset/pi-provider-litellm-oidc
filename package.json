@@ -13,7 +13,8 @@
     "keyless"
   ],
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "prepare": "node build.mjs || (npm install --no-save --no-audit --no-fund --include=dev esbuild@0.25.12 && node build.mjs)"
   },
   "pi": {
     "extensions": [
