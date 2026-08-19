@@ -37,6 +37,7 @@ env npm_config_registry=https://registry.npmjs.org/ \
 # 对 tech 组下所有 @public/* 包通用；私有部署时需第二行 token）
 #   registry=https://registry.npmjs.org/
 #   //registry.npmjs.org/:_authToken=<个人访问令牌(read_api)>
+echo registry=https://registry.npmjs.org/ >> ~/.npmrc
 pi install npm:pi-provider-litellm-oidc
 
 # git 源（注意 scp 简写必须带 git@，否则 Pi 会当作本地路径）
