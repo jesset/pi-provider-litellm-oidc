@@ -5,6 +5,12 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵守 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.5.2] - 2026-08-19
+
+### 变更
+
+- README 安装节补 `echo registry=... >> ~/.npmrc` 一行式持久配置写法
+
 ## [0.5.1] - 2026-08-19
 
 ### 修复
