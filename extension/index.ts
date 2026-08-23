@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ProviderConfig, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import type { ModelsStoreEntry, OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
-import { config, customerConfig, sessionConfig } from "./config.ts";
+import { config, costConfig, customerConfig, sessionConfig } from "./config.ts";
+import { setupLiteLLMCostTracking } from "./cost.ts";
 import { extractJwtClaim, loginDeviceFlow, refreshAccessToken } from "./keycloak.ts";
 import { fallbackModels, fetchGatewayModels, storedModels } from "./models.ts";
 
@@ -95,6 +96,15 @@ export default async function (pi: ExtensionAPI): Promise<void> {
       }
     }
   });
+
+  // 成本 / 用量可观测性（移植自 balcsida）：after_provider_response 把网关返回的
+  // x-litellm-response-cost（单次请求总成本）存入按 provider 隔离的 slot，message_end
+  // 按 input/output/cache token 比例摊到 message.usage.cost，供 pi/omp 每轮成本展示。
+  // leg 无关（pi-ai 已归一 anthropic *_tokens）；pi + omp 均有这两个 hook。可用
+  // LITELLM_COST_TRACKING="" 禁用、LITELLM_COST_HEADER 切折扣前/后头。
+  if (costConfig.enabled) {
+    setupLiteLLMCostTracking(pi, [config.providerId], costConfig.header);
+  }
 
   // /session-header — 查看当前注入配置，便于排查网关聚合/归因问题
   pi.registerCommand("session-header", {
