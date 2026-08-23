@@ -211,7 +211,7 @@ Device Flow 设备码展示按运行时传入的回调能力**三级探测**，�
 - Keycloak access token 默认 5 分钟有效期，刷新完全依赖 Pi 的 5 分钟缓冲窗口；offline refresh token 失效后 Pi 提示重新 `/login`
 - `reasoning` 三级优先推断（网关 `supports_reasoning` → `supported_openai_params` → 名字正则），稀疏模型仍靠名字正则，非 thinking 模型若被误判可调整 models.ts 的 `REASONING_MODEL_PATTERN` 或查网关 `supports_reasoning`/`supported_openai_params` 配置
 - LiteLLM 网关需暴露 Anthropic 协议端点（`/v1/messages`）且 JWT claims 含 `preferred_username`/`email`（`litellm_jwtauth` 字段映射）
-- **omp 限制**：`before_provider_headers` 钩子在 omp 中不触发（omp 无此事件），session/customer header 注入仅 pi 生效；成本跟踪不受此限（用 omp 也有的两个 hook，pi/omp 均生效）。omp 成本 hook 可用性经 `strings` 推断，发版前建议做一次 omp 端到端探针
+- **omp 限制**：`before_provider_headers` 钩子在 omp 中不触发（omp 无此事件），session/customer header 注入仅 pi 生效；成本跟踪不受此限（用 omp 也有的两个 hook，pi/omp 均生效，已端到端探针确认）。omp 上成本显示为 $0.00 是 LiteLLM 网关侧行为：对 coding-agent CLI 请求路由到免费别名后端（如 `claude-sonnet-5`→`glm-5.3`@智谱），网关上报成本为 0；非零展示需部署侧返回非零成本
 
 ## 开发
 

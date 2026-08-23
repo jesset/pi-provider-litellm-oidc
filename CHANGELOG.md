@@ -24,7 +24,7 @@
 
 ### 已知限制
 
-- omp 成本跟踪的 hook 可用性经 `strings` + 反混淆推断（omp 无发布 .d.ts），发版前需一次 omp 端到端探针确认 `x-litellm-response-cost` 被读到且 `usage.cost.total` 在 omp $X.XX 展示浮现
+- omp 成本跟踪的 hook 可用性经 `strings` + 反混淆推断（omp 无发布 .d.ts），**已端到端探针确认**（2026-08-23，omp 18.0.0）：`after_provider_response`+`message_end` 均触发、provider 守卫通过、APR→slot→ME→`usage.cost` 链路完整。探针另发现 LiteLLM 对 omp coding-agent 请求路由到免费别名后端（如 `claude-sonnet-5`→`glm-5.3`@智谱），网关上报成本为 0，LiteLLM 在值为 0 时省略裸 `x-litellm-response-cost`（折扣后）头，故 omp 上成本显 $0.00（准确反映免费路由）；非零展示需部署侧返回非零成本，扩展代码无需改动
 
 ## [0.5.3] - 2026-08-23
 
