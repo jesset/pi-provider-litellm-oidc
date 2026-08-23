@@ -5,6 +5,27 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵守 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.6.0] - 2026-08-23
+
+### 新增
+
+- **成本 / 用量可观测性**（移植自 balcsida `src/cost.ts`）：`after_provider_response` 读网关 `x-litellm-response-cost`（单次请求总成本，anthropic-messages 腿也返回），`message_end` 按 input/output/cache token 比例摊到 `message.usage.cost`，供 pi / omp 每轮成本展示。**pi + omp 均生效**（只用 omp 也有的两个 hook，不用 omp 缺的 `before_provider_headers`）。配置：`LITELLM_COST_TRACKING`（空串禁用，默认开）、`LITELLM_COST_HEADER`（默认 `x-litellm-response-cost` 折扣后实付，可配 `x-litellm-response-cost-original` 折扣前）
+- **模型推理能力三级推断**：网关 `supports_reasoning` 布尔优先（47/53 部署有值）→ `supported_openai_params` 含 `reasoning_effort`/`thinking` → 名字前缀正则兜底（6 个稀疏模型）
+- **测试套件**：`bun test`（43 个用例，零新增依赖——pi-* 为 import type 被 bun transpile 擦除）。覆盖 `extractJwtClaim`、`transformModelInfo`（模型过滤/聚合/推理/视觉）、`parseResponseCost`、`attributeCost`、cost hook 装配（provider 守卫/slot 存清/串扰防护）
+- GitLab CI 增加 `test` job（`oven/bun:1`，全分支跑 `bun test`）
+
+### 变更
+
+- `fetchGatewayModels` 的转换逻辑抽为纯函数 `transformModelInfo`（models.ts），网络路径行为不变，可独立测试
+
+### 修复
+
+- `.gitignore` 的 `node_modules/` 误被注释，本地 `node_modules` 会进 git——取消注释
+
+### 已知限制
+
+- omp 成本跟踪的 hook 可用性经 `strings` + 反混淆推断（omp 无发布 .d.ts），发版前需一次 omp 端到端探针确认 `x-litellm-response-cost` 被读到且 `usage.cost.total` 在 omp $X.XX 展示浮现
+
 ## [0.5.3] - 2026-08-23
 
 ### 修复

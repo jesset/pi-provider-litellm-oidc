@@ -145,6 +145,20 @@ pi
 
 > 迁移自全局扩展 `~/.pi/agent/extensions/session-id-header.ts`（原 `PI_SESSION_*` 变量）：合并后请删除旧全局扩展，避免双重注入；配置变量已改为 `LITELLM_SESSION_*`。若网关侧已按旧 header 名 `x-session-id` 建立了聚合逻辑，可设 `LITELLM_SESSION_HEADER=x-session-id` 保持旧行为。
 
+## 成本 / 用量可观测性
+
+移植自 balcsida `src/cost.ts`。网关在 `/v1/messages`（anthropic-messages 腿）响应头返回 `x-litellm-response-cost`（单次请求总成本）；扩展经两个钩子把它变成客户端可见的每轮成本：
+
+- `after_provider_response`：读该头存入按 provider 隔离的 pending slot（无成本头的响应清 slot，防跨请求残留串扰）
+- `message_end`：取 pending 总成本，按 input/output/cacheRead/cacheWrite token 比例摊到 `message.usage.cost`，返回替换消息——pi 与 omp 的每轮成本展示（omp 自带 $X.XX 渲染）均读 `usage.cost`
+
+**pi + omp 均生效**：成本跟踪只用 `after_provider_response` + `message_end`，omp 两者皆有；不用 omp 缺的 `before_provider_headers`，因此与 session/customer 注入不同，omp 上也工作。与 session/customer 正交：后者是网关侧 spend 维度（session_id/customer_id），前者是客户端侧单次成本值。
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `LITELLM_COST_TRACKING` | （启用） | 是否启用成本跟踪；显式设为空字符串可禁用 |
+| `LITELLM_COST_HEADER` | `x-litellm-response-cost` | 读取的响应头名；默认折扣后实付，可设 `x-litellm-response-cost-original` 取折扣前标价 |
+
 ## 模型列表策略
 
 - 启动时注册静态 fallback 列表（11 个常用 chat 模型）
@@ -152,6 +166,7 @@ pi
 - `refreshModels` 遵守框架两阶段刷新协议：`allowNetwork=false`（扩展注册、每次 refresh 的 phase 1）零网络请求；网络阶段从 `context.credential` 取已刷新的 access token 调 `/model/info`（尊重框架 abort signal 与本地 15s 超时）
 - 数据源用 `/model/info` 而非 `/v1/models`：前者返回 deployment 级 DB 实配值（token limits、`supports_vision`、mode），后者的这些字段来自 LiteLLM 静态 cost map 按公开模型名查找——自研/别名模型（如 `kimi-k2.7-code`）一律缺失，会被误滤掉。要求网关把 `/model/info` 列入 `public_routes`（用户 JWT 可访问）
 - 过滤规则：剔除 `mode` 显式为 embedding/rerank/image_generation 的条目（mode 缺失是自研模型常态，不据此排除）；隐藏 `staging/` 前缀（网关内部命名空间）与 `-openai` 后缀（OpenAI 协议腿孪生，与 anthropic 腿重复）的内部条目；同名多 deployment 聚合为一条（字段取首个非空值）；`input` 按 `supports_vision` 决定是否含 image（未声明按纯文本，向非多模态后端发图会 500）
+- `reasoning` 三级优先推断：网关 `supports_reasoning` 布尔优先（显式 true/false 均覆盖名字正则）→ `supported_openai_params` 含 `reasoning_effort`/`thinking` → 名字前缀正则 `REASONING_MODEL_PATTERN` 兜底（覆盖稀疏模型）
 - 未登录或拉取失败时回退 持久化目录 ?? fallback 列表
 
 ## 验证行为说明
@@ -189,12 +204,14 @@ Device Flow 设备码展示按运行时传入的回调能力**三级探测**，�
 
 `before_provider_headers` 钩子（注入 `x-litellm-trace-id` session 标识与 `x-litellm-customer-id` customer 标识）**仅在 pi 上生效**。omp 没有 `before_provider_headers` 事件（strings 验证：0 匹配），只有 `before_provider_request`——后者操作的是 API 请求体（`payload`：model/messages/tools/metadata），不含 HTTP headers，返回值也只能替换 payload。omp 的 `ProviderConfig.headers` 是静态 `Record<string,string>`，不支持动态回调。因此 omp 侧的网关请求不携带 session/customer header，网关侧 SpendLogs 无法按 session 聚合或按 customer 归因 omp 发出的请求。钩子在 omp 中注册安全（`on()` 不校验事件名，存入 handlers map 但永不触发），不影响其他功能。待 omp 暴露 header 注入能力后可启用。
 
+> **成本跟踪不受此限制**：成本可观测性用 `after_provider_response` + `message_end`（omp 两者皆有），不用 `before_provider_headers`，故 pi 与 omp 上均生效。
+
 ## 已知限制
 
 - Keycloak access token 默认 5 分钟有效期，刷新完全依赖 Pi 的 5 分钟缓冲窗口；offline refresh token 失效后 Pi 提示重新 `/login`
-- `reasoning: true` 按模型名前缀推断（claude-/kimi- 或 kimi\/、glm-/zai\/glm-/deepseek-/k3/llm-），非 thinking 模型若被误判可调整 models.ts 的 `REASONING_MODEL_PATTERN`
+- `reasoning` 三级优先推断（网关 `supports_reasoning` → `supported_openai_params` → 名字正则），稀疏模型仍靠名字正则，非 thinking 模型若被误判可调整 models.ts 的 `REASONING_MODEL_PATTERN` 或查网关 `supports_reasoning`/`supported_openai_params` 配置
 - LiteLLM 网关需暴露 Anthropic 协议端点（`/v1/messages`）且 JWT claims 含 `preferred_username`/`email`（`litellm_jwtauth` 字段映射）
-- **omp 限制**：`before_provider_headers` 钩子在 omp 中不触发（omp 无此事件），session/customer header 注入仅 pi 生效；omp 请求不经网关 session 聚合与 customer 归因
+- **omp 限制**：`before_provider_headers` 钩子在 omp 中不触发（omp 无此事件），session/customer header 注入仅 pi 生效；成本跟踪不受此限（用 omp 也有的两个 hook，pi/omp 均生效）。omp 成本 hook 可用性经 `strings` 推断，发版前建议做一次 omp 端到端探针
 
 ## 开发
 
@@ -202,6 +219,9 @@ Device Flow 设备码展示按运行时传入的回调能力**三级探测**，�
 # 构建（bundle + minify 产出 dist/index.js；npm install 时 prepare 也会自动构建）
 npm install --no-audit --no-fund
 npm run build
+
+# 测试（bun 原生跑 .ts，零依赖；pi-* 为 import type 被 transpile 擦除）
+bun test        # 或 npm test
 
 # 类型检查（机器无关写法，详见 CLAUDE.md 开发流程）
 npm install --no-save typescript@5 @types/node@22
