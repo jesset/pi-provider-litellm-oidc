@@ -61,6 +61,23 @@ export const customerConfig = {
     .filter(Boolean),
 };
 
+/**
+ * 成本 / 用量可观测性（移植自 balcsida src/cost.ts，适配本地 graft seam）。
+ * after_provider_response 读响应头的单次请求总成本，message_end 按 token 比例摊到
+ * message.usage.cost，供 pi / omp 的每轮成本展示（omp 自带 $X.XX 渲染读 usage.cost）。
+ * 研究已确认 anthropic 腿（/v1/messages）也返回该头，pi + omp 均有这两个 hook。
+ * LITELLM_COST_TRACKING 显式设为空字符串可禁用（语义同 session/customer 配置）；
+ * LITELLM_COST_HEADER 可指向 x-litellm-response-cost-original（折扣前标价）等。
+ */
+const costTrackingRaw = process.env.LITELLM_COST_TRACKING;
+
+export const costConfig = {
+  /** 是否启用成本跟踪；空字符串禁用，未设置默认启用 */
+  enabled: costTrackingRaw === undefined ? true : costTrackingRaw.trim() !== "",
+  /** 读取的响应头名；默认 x-litellm-response-cost（折扣后实付） */
+  header: env("LITELLM_COST_HEADER", "x-litellm-response-cost"),
+};
+
 export const keycloak = {
   deviceEndpoint: `${config.keycloakBaseUrl}/realms/${config.keycloakRealm}/protocol/openid-connect/auth/device`,
   tokenEndpoint: `${config.keycloakBaseUrl}/realms/${config.keycloakRealm}/protocol/openid-connect/token`,
