@@ -2,6 +2,24 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
 import { config, keycloak } from "./config.ts";
 
+/** 新 AuthInteraction 通道的 device_code 通知事件；legacy 通道无 notify 字段 */
+interface DeviceCodeNotifyEvent {
+  type: "device_code";
+  userCode: string;
+  verificationUri: string;
+  intervalSeconds?: number;
+  expiresInSeconds?: number;
+}
+
+/**
+ * 扩展 login 回调的运行时形状。pi 与 omp 当前都传 legacy OAuthLoginCallbacks
+ * （pi 完整、omp 缺 onDeviceCode）；未来框架若把扩展通道切到 AuthInteraction，
+ * 对象上会出现 notify/prompt——字段按可选探测，见 loginDeviceFlow 内三级展示。
+ */
+type LoginCallbacks = OAuthLoginCallbacks & {
+  notify?: (event: DeviceCodeNotifyEvent) => void;
+};
+
 interface DeviceAuthorizationResponse {
   device_code: string;
   user_code: string;
@@ -49,7 +67,7 @@ async function postForm(url: string, params: Record<string, string>, signal?: Ab
 }
 
 /** RFC 8628 Device Authorization Flow against Keycloak. */
-export async function loginDeviceFlow(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+export async function loginDeviceFlow(callbacks: LoginCallbacks): Promise<OAuthCredentials> {
   const signal = callbacks.signal;
 
   const deviceRes = await fetch(keycloak.deviceEndpoint, {
@@ -66,12 +84,36 @@ export async function loginDeviceFlow(callbacks: OAuthLoginCallbacks): Promise<O
     throw new Error(`Keycloak device authorization failed: ${detail}`);
   }
 
-  callbacks.onDeviceCode({
-    userCode: device.user_code,
-    verificationUri: device.verification_uri_complete ?? device.verification_uri,
-    intervalSeconds: device.interval ?? 5,
-    expiresInSeconds: device.expires_in ?? 600,
-  });
+  // 设备码展示按运行时传入的回调能力三级探测：
+  // 1) onDeviceCode —— pi（adaptOAuth 适配器）构造的 legacy 回调完整提供，
+  //    走原生设备码对话框；
+  // 2) onAuth —— omp（compiled binary）的 legacy 回调省略了 onDeviceCode，
+  //    回退到 onAuth：verificationUri 作可点击 URL、userCode 写入 instructions，
+  //    omp 的 LoginDialog 渲染等价登录对话框（实测 omp 18.0.0）；
+  // 3) notify({type:"device_code"}) —— 新 AuthInteraction 通道（pi-ai 内置
+  //    provider 已用此形状；扩展通道未来若切换，此处自动生效，无需发版）。
+  const verificationUri = device.verification_uri_complete ?? device.verification_uri;
+  if (typeof callbacks.onDeviceCode === "function") {
+    callbacks.onDeviceCode({
+      userCode: device.user_code,
+      verificationUri,
+      intervalSeconds: device.interval ?? 5,
+      expiresInSeconds: device.expires_in ?? 600,
+    });
+  } else if (typeof callbacks.onAuth === "function") {
+    callbacks.onAuth({
+      url: verificationUri,
+      instructions: `Enter code ${device.user_code} at the URL above to verify`,
+    });
+  } else if (typeof callbacks.notify === "function") {
+    callbacks.notify({
+      type: "device_code",
+      userCode: device.user_code,
+      verificationUri,
+      intervalSeconds: device.interval ?? 5,
+      expiresInSeconds: device.expires_in ?? 600,
+    });
+  }
 
   let intervalMs = (device.interval ?? 5) * 1000;
   const deadline = Date.now() + (device.expires_in ?? 600) * 1000;

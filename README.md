@@ -1,6 +1,6 @@
 # pi-provider-litellm-oidc
 
-Pi coding agent 通过 Keycloak OIDC 免配置（keyless）接入 LiteLLM 网关的 provider 扩展，无需任何静态 API Key。
+Pi coding agent 通过 Keycloak OIDC 免配置（keyless）接入 LiteLLM 网关的 provider 扩展，无需任何静态 API Key。一套代码同时适配 pi 与 omp（oh-my-pi）。
 
 内嵌 LiteLLM 默认值开箱即用；全部部署参数可通过环境变量覆盖，支持多套 Keycloak + LiteLLM 网关实例并存。
 
@@ -12,7 +12,10 @@ pi agent
   │ /login <provider> ──→ oauth.login(callbacks)
   │    1. POST {keycloak}/realms/{realm}/protocol/openid-connect/auth/device
   │       (公共客户端, scope="openid profile email offline_access")
-  │    2. callbacks.onDeviceCode() ← Pi 原生展示设备码与验证 URL
+  │    2. 展示设备码——按回调能力三级探测：
+  │       onDeviceCode() → pi 原生设备码对话框
+  │       onAuth()       → omp LoginDialog（verificationUri + userCode）
+  │       notify()       → 未来 AuthInteraction 通道（自动生效）
   │    3. 轮询 token endpoint（grant_type=urn:ietf:params:oauth:grant-type:device_code）
   │    4. 返回 {access, refresh, expires}，Pi 持久化到 ~/.pi/agent/auth.json
   │
@@ -50,6 +53,18 @@ cd pi-provider-litellm-oidc && ./install.sh
 > git 源安装会在本机 clone 完整源码并经 `prepare` 钩子现场构建 dist（需 Node ≥ 22 与外网可达 npmjs 拉 esbuild）——拿到的是源码，防篡改保护只存在于 npm 通道；对普通用户推荐 npm 方式。
 
 已运行中的 Pi 会话用 `/reload` 热加载。
+
+### 方式 B：omp install（oh-my-pi）
+
+```bash
+# omp 同样支持 pi install 语法（omp 内置 pi 兼容的插件加载器）
+env npm_config_registry=https://registry.npmjs.org/ \
+  omp install npm:pi-provider-litellm-oidc
+```
+
+> omp（oh-my-pi）是 pi 的 compiled binary 发行版，内置 legacy 插件兼容 shim，
+> 自动把 `@earendil-works/pi-*` 导入重写为其内置 `@oh-my-pi/pi-*` 包。本扩展
+> 已适配两套运行时的 OAuth 回调差异（见下文"双运行时兼容"）。
 
 ### Keycloak 侧前置要求
 
@@ -148,14 +163,38 @@ pi
 ## 环境要求
 
 - Pi ≥ 0.81.0（0.84.x 捆绑的 undici 需要 Node ≥ 22；系统默认 node 为 20 时需用 node@22 wrapper 启动 pi）
+- omp（oh-my-pi）≥ 17.0（compiled binary，无外部 Node 依赖；内置 legacy 插件兼容 shim 自动重写 `@earendil-works/pi-*` 导入到 `@oh-my-pi/pi-*`）
 - 网络可达 Keycloak 与 LiteLLM 网关
+
+## 双运行时兼容（pi / omp）
+
+pi 与 omp 都以 legacy `OAuthLoginCallbacks` 调用扩展的 `oauth.login(callbacks)`，但构造的回调对象有差异：
+
+| 回调 | pi（adaptOAuth 适配器） | omp（legacy 兼容适配器） |
+|---|---|---|
+| `onDeviceCode` | 提供（原生设备码对话框） | **缺失** |
+| `onAuth` | 提供 | 提供（渲染登录对话框，含 Ctrl+click URL） |
+| `onPrompt` / `onProgress` | 提供 | 提供 |
+| `onSelect` / `onManualCodeInput` | 提供 | 缺失 |
+
+Device Flow 设备码展示按运行时传入的回调能力**三级探测**，一套代码同时适配当前两套运行时并前瞻未来：
+
+1. `onDeviceCode` —— pi 的 `adaptOAuth` 适配器完整提供，走原生设备码对话框（pi 行为不变）
+2. `onAuth` —— omp 的 legacy 回调省略了 `onDeviceCode`，回退到 `onAuth`：以 verificationUri 为可点击 URL、userCode 写入 instructions，omp 的 LoginDialog 渲染等价登录对话框
+3. `notify({type:"device_code"})` —— 新 `AuthInteraction` 通道（pi-ai 内置 provider 已用此形状；扩展通道未来若切换，此处自动生效，无需发版）
+
+这修复了 omp 下 `/login` 报 `e.onDeviceCode is not a function` 的问题。三分支已对真实 Keycloak 端到端验证（各取真实 device code 确认路由正确）。`refreshToken` / `getApiKey` 两套运行时签名一致，无需适配。
+
+### Session / Customer header 注入限制
+
+`before_provider_headers` 钩子（注入 `x-litellm-trace-id` session 标识与 `x-litellm-customer-id` customer 标识）**仅在 pi 上生效**。omp 没有 `before_provider_headers` 事件（strings 验证：0 匹配），只有 `before_provider_request`——后者操作的是 API 请求体（`payload`：model/messages/tools/metadata），不含 HTTP headers，返回值也只能替换 payload。omp 的 `ProviderConfig.headers` 是静态 `Record<string,string>`，不支持动态回调。因此 omp 侧的网关请求不携带 session/customer header，网关侧 SpendLogs 无法按 session 聚合或按 customer 归因 omp 发出的请求。钩子在 omp 中注册安全（`on()` 不校验事件名，存入 handlers map 但永不触发），不影响其他功能。待 omp 暴露 header 注入能力后可启用。
 
 ## 已知限制
 
 - Keycloak access token 默认 5 分钟有效期，刷新完全依赖 Pi 的 5 分钟缓冲窗口；offline refresh token 失效后 Pi 提示重新 `/login`
 - `reasoning: true` 按模型名前缀推断（claude-/kimi- 或 kimi\/、glm-/zai\/glm-/deepseek-/k3/llm-），非 thinking 模型若被误判可调整 models.ts 的 `REASONING_MODEL_PATTERN`
 - LiteLLM 网关需暴露 Anthropic 协议端点（`/v1/messages`）且 JWT claims 含 `preferred_username`/`email`（`litellm_jwtauth` 字段映射）
-- 模型目录拉取需网关将 `/model/info` 列入 `public_routes`（默认 LiteLLM 配置中它是 admin 端点；未配置时网络刷新失败，回退静态列表）
+- **omp 限制**：`before_provider_headers` 钩子在 omp 中不触发（omp 无此事件），session/customer header 注入仅 pi 生效；omp 请求不经网关 session 聚合与 customer 归因
 
 ## 开发
 

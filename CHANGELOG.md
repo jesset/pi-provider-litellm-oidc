@@ -5,6 +5,16 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵守 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.5.3] - 2026-08-23
+
+### 修复
+
+- 兼容 omp（oh-my-pi，compiled binary）并前瞻未来 AuthInteraction 通道：Device Flow 设备码展示改为按运行时传入的回调能力三级探测——优先 `onDeviceCode`（pi 的 adaptOAuth 适配器完整提供，走原生设备码对话框），缺失时回退 `onAuth`（omp 的 legacy 回调省略了 `onDeviceCode`，以 verificationUri 为可点击 URL、userCode 写入 instructions，omp 的 LoginDialog 渲染等价登录对话框），再缺失时用 `notify({type:"device_code"})`（新 AuthInteraction 通道，pi-ai 内置 provider 已用此形状；扩展通道未来若切换，此处自动生效，无需发版）。修复 omp 下 `/login` 报 `e.onDeviceCode is not a function`。三分支已对真实 Keycloak 端到端验证
+
+### 已知限制
+
+- omp 无 `before_provider_headers` 事件（只有 `before_provider_request`，操作 API 请求体而非 HTTP headers），session/customer header 注入（`x-litellm-trace-id` / `x-litellm-customer-id`）仅在 pi 上生效；omp 请求不携带这些 header，网关侧无法按 session 聚合或按 customer 归因。钩子在 omp 中注册安全但不触发，待 omp 暴露 header 注入能力后可启用
+
 ## [0.5.2] - 2026-08-19
 
 ### 变更
@@ -85,7 +95,11 @@
 - 全部部署参数经环境变量覆盖，LiteLLM 默认值开箱即用
 - `/session-header` 命令查看注入配置与当前 session id
 
-[Unreleased]: https://github.com/jesset/pi-provider-litellm-oidc/compare/v0.4.0...HEAD
+[0.5.3]: https://github.com/jesset/pi-provider-litellm-oidc/compare/v0.5.2...v0.5.3
+[0.5.2]: https://github.com/jesset/pi-provider-litellm-oidc/compare/v0.5.1...v0.5.2
+[0.5.1]: https://github.com/jesset/pi-provider-litellm-oidc/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/jesset/pi-provider-litellm-oidc/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/jesset/pi-provider-litellm-oidc/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/jesset/pi-provider-litellm-oidc/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/jesset/pi-provider-litellm-oidc/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/jesset/pi-provider-litellm-oidc/compare/v0.3.0...v0.3.1
