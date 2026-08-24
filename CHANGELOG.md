@@ -5,6 +5,20 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵守 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.7.0] - 2026-08-24
+
+### 新增
+
+- **customer 头模型级兜底注入**：`oauth.modifyModels` 在框架每次取模型目录时用当前 credential 把 `x-litellm-customer-id` 写进本 provider 全部 `model.headers`。此前 customer 头仅经 `before_provider_headers` 钩子注入，只覆盖会话主循环；扩展用裸 `pi-ai/compat` `streamSimple` 直接调 LLM 时（实测 `pi-observational-memory` 的 observer/reflector/dropper 记忆压缩调用）钩子不触发，网关侧 `end_user` 为空。模型级 stamp 经 pi-ai `createClient` 的 `mergeClientHeaders` 合并 `model.headers`，覆盖到这些绕过钩子的调用路径（anthropic-messages 主路径与 OAuth `sk-ant-oat` 路径均合）。session 头仍仅走钩子（会话级概念不属于模型）；两通道同值时请求级头（hook 产物）优先于 `defaultHeaders`（`model.headers`），无冲突。`models-store` 落盘的是原始目录，不含 stamp。新增纯函数 `stampCustomerHeader`（models.ts，可测）
+
+### 修复
+
+- 网关 SpendLogs 中大量单请求“神秘 session”（随机 uuid、`end_user` 为空）的归因缺失：根因为 `pi-observational-memory` 等扩展的后台 LLM 调用绕过会话钩子，既不带 customer 头也不带 trace 头（LiteLLM 对无 trace 头的请求自动生成 uuid 作 `session_id`）。模型级兜底注入后这些请求带上 customer 头，`end_user` 有值；`session_id` 仍为自动 uuid（后台跨会话压缩本无会话归属，符合预期）。端到端验证（2026-08-24）：`pi -p` 经本地转发代理抓包确认 OM 压缩请求携带 `x-litellm-customer-id`，对应 spend 行 `end_user` 由空 → 用户 email
+
+### 文档
+
+- CLAUDE.md / README 记录 customer 头双通道注入设计与排错提示（无 trace 头请求的 `session_id` 是网关自动 uuid，不能当作客户端 session 关联）
+
 ## [0.6.0] - 2026-08-23
 
 ### 新增
