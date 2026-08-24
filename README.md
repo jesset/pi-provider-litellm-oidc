@@ -173,6 +173,7 @@ pi
 - 数据源用 `/model/info` 而非 `/v1/models`：前者返回 deployment 级 DB 实配值（token limits、`supports_vision`、mode），后者的这些字段来自 LiteLLM 静态 cost map 按公开模型名查找——自研/别名模型（如 `kimi-k2.7-code`）一律缺失，会被误滤掉。要求网关把 `/model/info` 列入 `public_routes`（用户 JWT 可访问）
 - 过滤规则：剔除 `mode` 显式为 embedding/rerank/image_generation 的条目（mode 缺失是自研模型常态，不据此排除）；隐藏 `staging/` 前缀（网关内部命名空间）与 `-openai` 后缀（OpenAI 协议腿孪生，与 anthropic 腿重复）的内部条目；同名多 deployment 聚合为一条（字段取首个非空值）；`input` 按 `supports_vision` 决定是否含 image（未声明按纯文本，向非多模态后端发图会 500）
 - `reasoning` 三级优先推断：网关 `supports_reasoning` 布尔优先（显式 true/false 均覆盖名字正则）→ `supported_openai_params` 含 `reasoning_effort`/`thinking` → 名字前缀正则 `REASONING_MODEL_PATTERN` 兜底（覆盖稀疏模型）
+- `max` 思考级别：每个 `reasoning=true` 的模型附加 `thinkingLevelMap: { max: "max" }` + `compat.forceAdaptiveThinking`，让 pi 思考级别菜单出现 max 且 effort=max 真正经 anthropic adaptive thinking（`output_config.effort`）传给网关。否则 max 被 `clampReasoning` 压到 high、走 budget-based、effort 不传递，沦为 UI 摆设。xhigh 不声明（litellm 后端不支持）。实测 glm-5.2 max 比 high 多约 70% 思考量；副作用：low/medium/high 从 budget-based 改为 effort-based（与 kimi/k3 官方配置一致）
 - 未登录或拉取失败时回退 持久化目录 ?? fallback 列表
 
 ## 验证行为说明
@@ -216,6 +217,7 @@ Device Flow 设备码展示按运行时传入的回调能力**三级探测**，�
 
 - Keycloak access token 默认 5 分钟有效期，刷新完全依赖 Pi 的 5 分钟缓冲窗口；offline refresh token 失效后 Pi 提示重新 `/login`
 - `reasoning` 三级优先推断（网关 `supports_reasoning` → `supported_openai_params` → 名字正则），稀疏模型仍靠名字正则，非 thinking 模型若被误判可调整 models.ts 的 `REASONING_MODEL_PATTERN` 或查网关 `supports_reasoning`/`supported_openai_params` 配置
+- `max` 思考级别：`forceAdaptiveThinking` 对 deepseek-v4-flash / glm-5.3 / zai/glm-4.7 等后端未实测（限流/权限），最坏情况后端不思考但不报错；xhigh 不可选（litellm 后端不支持）。若某后端拒绝 adaptive thinking 格式，该模型 thinking 请求会报错，可在 models.ts 的 `ADAPTIVE_THINKING` 按模型名豁免
 - LiteLLM 网关需暴露 Anthropic 协议端点（`/v1/messages`）且 JWT claims 含 `preferred_username`/`email`（`litellm_jwtauth` 字段映射）
 - **omp 限制**：`before_provider_headers` 钩子在 omp 中不触发（omp 无此事件），session/customer header 注入仅 pi 生效；成本跟踪不受此限（用 omp 也有的两个 hook，pi/omp 均生效，已端到端探针确认）。omp 上成本显示为 $0.00 是 LiteLLM 网关侧行为：对 coding-agent CLI 请求路由到免费别名后端（如 `claude-sonnet-5`→`glm-5.3`@智谱），网关上报成本为 0；非零展示需部署侧返回非零成本
 
