@@ -125,6 +125,12 @@ pi
 
 2. **Customer 标识**（用户 email）：默认 header `x-litellm-customer-id`，这是 LiteLLM proxy 的标准 customer/end-user 头（网关零配置即解析），值写入 SpendLogs 的 customer 维度；配合网关侧 `user_header_mappings`（映射用户属性）与 `extra_spend_tag_headers`（自动打 spend tag）可按用户 email 建用户、聚合个人用量。值直接取自框架已写入最终请求头的 `Authorization: Bearer <token>`（与实际发送的 token 严格同源，大小写不敏感解析），本地 base64url 解 JWT payload 取 `email` claim，不验签（同一 token 本就作为 bearer 发往网关，只是镜像一个 claim）；token 非 JWT、claim 缺失或未登录时跳过注入，不影响请求。
 
+   Customer 头走**双通道**保证覆盖所有调用路径：
+   - **会话主循环**（工具调用、多 turn、重试）经 `before_provider_headers` 钩子注入；
+   - **模型级呑底**：`oauth.modifyModels` 在框架每次取模型目录时用当前 credential 把 customer 头写进每个 model.headers，这样**绕过会话钩子**的调用（如 `pi-observational-memory` 的观察/反思/压缩用裸 `pi-ai/compat` streamSimple 直接调 LLM）经 pi-ai createClient 合并 `model.headers` 也同样携带。session 头仍只走钩子通道（session id 是会话级概念，不属于模型）。落盘的 models-store 只存原始目录、不含用户标识。
+
+   > 排错提示：网关 SpendLogs 里那些 session_id 是随机 uuid、且单请求的“神秘 session”，多来自这类绕过钩子的后台调用（OM 压缩、第三方 SDK 客户端等无 trace 头，LiteLLM 会自动生成 uuid 作 session_id）；本扩展的 customer 头现已覆盖到 OM 这类调用，但无 trace 头的请求仍不会有真实会话关联。
+
 | 变量 | 默认值 | 说明 |
 |---|---|---|
 | `LITELLM_CUSTOMER_HEADER` | `x-litellm-customer-id` | customer 标识 header 名；显式设为空字符串可禁用注入 |
