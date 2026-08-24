@@ -1,6 +1,7 @@
 import type { ModelsStoreEntry } from "@earendil-works/pi-ai";
 import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import { modelInfoEndpoint } from "./config.ts";
+import { extractJwtClaim } from "./keycloak.ts";
 
 /** /model/info 返回的 deployment 级条目（只取关心的字段；同名多 deployment 多行） */
 interface LiteLLMDeploymentEntry {
@@ -121,6 +122,27 @@ export function transformModelInfo(data: LiteLLMDeploymentEntry[] | undefined): 
   });
 
   return models.length > 0 ? models : null;
+}
+
+/**
+ * 模型级 customer 头注入（呑底通道，配套 modifyModels 使用）：
+ * 把从当前 credential JWT 解出的用户标识写进每个 model.headers。
+ * before_provider_headers hook 只覆盖走会话主循环（sdk streamFn 带 transformHeaders）
+ * 的请求；扩展用裸 pi-ai streamSimple 直接调 LLM 时（如 pi-observational-memory 的
+ * observer/reflector/dropper）hook 不触发——但这些调用经 createClient 的
+ * mergeClientHeaders 合并 model.headers，所以模型级 stamp 能覆盖到它们。
+ * 纯函数：解不出 claim / 未配置 header 时原样返回，永不修改入参。
+ */
+export function stampCustomerHeader<T extends { headers?: Record<string, string> }>(
+  models: T[],
+  bearer: string | undefined,
+  header: string,
+  claims: string[],
+): T[] {
+  if (!header || !bearer) return models;
+  const customerId = extractJwtClaim(bearer, claims);
+  if (!customerId) return models;
+  return models.map((m) => ({ ...m, headers: { ...m.headers, [header]: customerId } }));
 }
 
 export async function fetchGatewayModels(bearerToken: string, signal?: AbortSignal): Promise<ProviderModelConfig[] | null> {

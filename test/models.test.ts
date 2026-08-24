@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { transformModelInfo } from "../extension/models.ts";
+import { stampCustomerHeader, transformModelInfo } from "../extension/models.ts";
+import { makeJwt, opaqueToken } from "./helpers.ts";
 
 /** 把结果按 id 索引，断言不依赖数组顺序（Map 按首次出现顺序，但测试应稳）。 */
 function byId(models: ReturnType<typeof transformModelInfo>): Record<string, NonNullable<typeof models>[number]> {
@@ -179,5 +180,54 @@ describe("transformModelInfo — supported_openai_params 奖励", () => {
       { model_name: "smart", model_info: { supported_openai_params: ["reasoning_effort"] } },
     ]);
     expect(byId(models)["smart"].reasoning).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// stampCustomerHeader：模型级 customer 头注入（modifyModels 兜底通道）
+// ---------------------------------------------------------------------------
+
+describe("stampCustomerHeader", () => {
+  const models = [
+    { id: "glm-5.2", cost: { input: 0 } },
+    { id: "kimi-k2.7-code", cost: { input: 0 }, headers: { "x-custom": "keep" } },
+  ];
+
+  it("JWT 命中 claim 时给每个模型注入 header，已有 headers 字段保留并合并", () => {
+    const stamped = stampCustomerHeader(
+      models,
+      makeJwt({ email: "user@example.com" }),
+      "x-litellm-customer-id",
+      ["email"],
+    );
+    expect(stamped[0].headers).toEqual({ "x-litellm-customer-id": "user@example.com" });
+    // 已有 header 不被清掉（spread 合并，注入键不冲突时共存）
+    expect(stamped[1].headers).toEqual({
+      "x-custom": "keep",
+      "x-litellm-customer-id": "user@example.com",
+    });
+    // 原数组不被修改（纯函数）
+    expect(models[0]).not.toHaveProperty("headers");
+  });
+
+  it("claim 链按顺序取第一个命中（email 缺失时回落 preferred_username）", () => {
+    const stamped = stampCustomerHeader(
+      [{ id: "glm-5.2" }],
+      makeJwt({ preferred_username: "alice" }),
+      "x-litellm-customer-id",
+      ["email", "preferred_username"],
+    );
+    expect(stamped[0].headers?.["x-litellm-customer-id"]).toBe("alice");
+  });
+
+  it("非 JWT / claim 缺失 / 无 bearer / 未配置 header 时原样返回同一数组", () => {
+    const a = stampCustomerHeader(models, opaqueToken(), "x-litellm-customer-id", ["email"]);
+    const b = stampCustomerHeader(models, makeJwt({ sub: "x" }), "x-litellm-customer-id", ["email"]);
+    const c = stampCustomerHeader(models, undefined, "x-litellm-customer-id", ["email"]);
+    const d = stampCustomerHeader(models, makeJwt({ email: "a@b.c" }), "", ["email"]);
+    expect(a).toBe(models);
+    expect(b).toBe(models);
+    expect(c).toBe(models);
+    expect(d).toBe(models);
   });
 });

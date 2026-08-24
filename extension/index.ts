@@ -3,7 +3,7 @@ import type { ModelsStoreEntry, OAuthCredentials, OAuthLoginCallbacks } from "@e
 import { config, costConfig, customerConfig, sessionConfig } from "./config.ts";
 import { setupLiteLLMCostTracking } from "./cost.ts";
 import { extractJwtClaim, loginDeviceFlow, refreshAccessToken } from "./keycloak.ts";
-import { fallbackModels, fetchGatewayModels, storedModels } from "./models.ts";
+import { fallbackModels, fetchGatewayModels, stampCustomerHeader, storedModels } from "./models.ts";
 
 const oauth: NonNullable<ProviderConfig["oauth"]> = {
   name: `${config.displayName} (Keycloak SSO)`,
@@ -18,6 +18,22 @@ const oauth: NonNullable<ProviderConfig["oauth"]> = {
 
   getApiKey(credentials: OAuthCredentials): string {
     return credentials.access;
+  },
+
+  // 模型级 customer 头注入（呑底通道）：before_provider_headers hook 只覆盖会话
+  // 主循环；扩展用裸 pi-ai streamSimple 调 LLM 时（如 pi-observational-memory）
+  // hook 不触发。modifyModels 在 getModels() 时用当前 credential 给本 provider
+  // 全部 model 打 customer 头，这些路径经 createClient 合 model.headers 同样携带。
+  // credential 变化（刷新/换号）时 getModels 重算；models-store 只存原始目录，
+  // 落盘数据不含用户标识。session 头仍由 hook 注入（session id 是会话级概念，
+  // 不属于模型）。
+  modifyModels(models, credentials) {
+    return stampCustomerHeader(
+      models,
+      credentials?.access,
+      customerConfig.header,
+      customerConfig.claims,
+    );
   },
 };
 
