@@ -7,6 +7,16 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **发布供应链守护**（`scripts/supply-chain-guard.mjs`，`npm run supply-chain:guard`，CI verify/publish 均执行；移植自 balcsida 的裁剪版，调研见 `docs/wayfinder/research/08-balcsida-packaging-tamper.md`）：禁安装期脚本（`preinstall`/`install`/`postinstall`；`prepare` 保留——git 源安装的生命线）、零运行时依赖从约定升级为 CI 强制、禁非 registry 依赖 spec（`git:`/`file:`/`link:` 等）、lockfile `resolved` 域名白名单（registry.npmjs.org + github.com/jesset）、npm pack 文件白名单精确到文件名（仅 `LICENSE`/`README.md`/`dist/index.js`/`package.json`）
+- **发布前版本一致性断言**：publish job 先校验 tag == `package.json` version == `package-lock.json` version，杜绝打错 tag 静默发布错版
+
+### 变更
+
+- CI 装依赖改用 `npm ci --ignore-scripts`（verify/publish），`prepare` 被跳过，构建统一走显式 `npm run build`（esbuild 平台二进制经 optionalDependencies 安装不受影响，已实测）；CI 镜像 `node:22` pin 到次版本 `node:22.23`
+- 调研笔记：balcsida/pi-provider-litellm 打包分发与防篡改机制（`docs/wayfinder/research/08`）——其"防篡改"实指发布管线完整性，客户端本地篡改防护为零（dist 不 minify，弱于本项目）
+
 ## [0.8.0] - 2026-08-24
 
 ### 新增

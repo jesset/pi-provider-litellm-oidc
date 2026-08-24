@@ -15,6 +15,7 @@
   "scripts": {
     "build": "node build.mjs",
     "test": "bun test",
+    "supply-chain:guard": "node scripts/supply-chain-guard.mjs",
     "prepare": "test -d node_modules/esbuild || npm install --no-save --no-audit --no-fund --include=dev esbuild@0.25.12; node build.mjs"
   },
   "pi": {
