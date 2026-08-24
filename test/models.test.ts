@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { stampCustomerHeader, transformModelInfo } from "../extension/models.ts";
+import { fallbackModels, stampCustomerHeader, transformModelInfo } from "../extension/models.ts";
 import { makeJwt, opaqueToken } from "./helpers.ts";
 
 /** 把结果按 id 索引，断言不依赖数组顺序（Map 按首次出现顺序，但测试应稳）。 */
@@ -180,6 +180,81 @@ describe("transformModelInfo — supported_openai_params 奖励", () => {
       { model_name: "smart", model_info: { supported_openai_params: ["reasoning_effort"] } },
     ]);
     expect(byId(models)["smart"].reasoning).toBe(true);
+  });
+});
+
+/**
+ * Cycle 4：推理模型声明 max 思考级别 + 走 anthropic adaptive thinking 腿。
+ * thinkingLevelMap 只列 max（off/minimal/low/medium/high 在 pi 的
+ * getSupportedThinkingLevels 里默认可选，xhigh 不声明——litellm 后端不支持）；
+ * compat.forceAdaptiveThinking 让 effort 经 output_config.effort 传给网关
+ * （否则 budget-based 把 max clamp 到 high，max 沦为 UI 摆设）。非推理模型不加。
+ */
+describe("transformModelInfo — max 思考级别 + adaptive thinking", () => {
+  it("推理模型（supports_reasoning=true）声明 thinkingLevelMap.max 与 forceAdaptiveThinking", () => {
+    const models = transformModelInfo([
+      { model_name: "claude-sonnet-5", model_info: { supports_reasoning: true } },
+    ]);
+    const m = byId(models)["claude-sonnet-5"];
+    expect(m.thinkingLevelMap).toEqual({ max: "max" });
+    expect(m.compat).toEqual({ forceAdaptiveThinking: true });
+  });
+
+  it("推理模型（名字正则匹配、supports_reasoning 缺失）同样声明", () => {
+    const models = transformModelInfo([
+      { model_name: "glm-5.2", model_info: {} },
+    ]);
+    const m = byId(models)["glm-5.2"];
+    expect(m.thinkingLevelMap).toEqual({ max: "max" });
+    expect(m.compat?.forceAdaptiveThinking).toBe(true);
+  });
+
+  it("推理模型（supported_openai_params 含 reasoning_effort）同样声明", () => {
+    const models = transformModelInfo([
+      { model_name: "smart", model_info: { supported_openai_params: ["reasoning_effort"] } },
+    ]);
+    const m = byId(models)["smart"];
+    expect(m.thinkingLevelMap).toEqual({ max: "max" });
+    expect(m.compat?.forceAdaptiveThinking).toBe(true);
+  });
+
+  it("非推理模型（smart，无声明且名字不匹配）不含 thinkingLevelMap / compat", () => {
+    const models = transformModelInfo([
+      { model_name: "smart", model_info: {} },
+    ]);
+    const m = byId(models)["smart"];
+    expect(m.thinkingLevelMap).toBeUndefined();
+    expect(m.compat).toBeUndefined();
+  });
+
+  it("supports_reasoning 显式 false（即使名字匹配正则）不含", () => {
+    const models = transformModelInfo([
+      { model_name: "claude-sonnet-5", model_info: { supports_reasoning: false } },
+    ]);
+    const m = byId(models)["claude-sonnet-5"];
+    expect(m.reasoning).toBe(false);
+    expect(m.thinkingLevelMap).toBeUndefined();
+    expect(m.compat).toBeUndefined();
+  });
+
+  it("thinkingLevelMap 不含 xhigh（litellm 后端不支持）", () => {
+    const models = transformModelInfo([
+      { model_name: "glm-5.2", model_info: { supports_reasoning: true } },
+    ]);
+    const m = byId(models)["glm-5.2"];
+    expect(m.thinkingLevelMap).not.toHaveProperty("xhigh");
+  });
+});
+
+describe("fallbackModels", () => {
+  it("所有 fallback 模型声明 max 思考级别 + forceAdaptiveThinking", () => {
+    const models = fallbackModels();
+    expect(models.length).toBeGreaterThan(0);
+    for (const m of models) {
+      expect(m.reasoning).toBe(true);
+      expect(m.thinkingLevelMap).toEqual({ max: "max" });
+      expect(m.compat?.forceAdaptiveThinking).toBe(true);
+    }
   });
 });
 

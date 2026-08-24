@@ -5,6 +5,17 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵守 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 新增
+
+- **max 思考级别**：litellm 全部推理模型附加 `thinkingLevelMap: { max: "max" }` + `compat: { forceAdaptiveThinking: true }`（models.ts 常量 `ADAPTIVE_THINKING`，transformModelInfo 与 FALLBACK_MODELS 两处 spread）。网关 `/model/info` 不返回 thinking 级别映射（`supports_*_reasoning_effort` 全 NULL，研究 04），而 pi 的 `getSupportedThinkingLevels` 对 `max` 要求 `thinkingLevelMap` 显式声明——故此前 UI 缺 max。`forceAdaptiveThinking` 让 anthropic-messages 腿走 adaptive 分支，effort=max 经 `output_config.effort` 传给网关（否则 budget-based 把 max clamp 到 high，max 沦为摆设）。xhigh 不声明（litellm 后端不支持，pi-ai 内置 zai/kimi catalog 亦无）。实测（2026-08-24）glm-5.2 adaptive+effort=max 比 high 多约 70% 思考量（679 vs 395 字符）；k3 / kimi-k2.7-code / kimi/k3 / claude-sonnet-5 同样接受 adaptive+max。副作用：low/medium/high 从 budget-based 改为 effort-based（与 kimi/k3 官方 anthropic 腿配置一致，实测全部正常）
+- **测试**：`bun test` 53 个用例（+7），覆盖推理/非推理模型的 `thinkingLevelMap` 与 `forceAdaptiveThinking` 注入、fallback 模型一致性
+
+### 文档
+
+- CLAUDE.md / README 记录 max 思考级别设计、验证要点与已知限制
+
 ## [0.7.0] - 2026-08-24
 
 ### 新增

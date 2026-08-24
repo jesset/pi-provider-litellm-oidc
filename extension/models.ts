@@ -24,6 +24,25 @@ const REASONING_MODEL_PATTERN = /^(?:claude-|kimi[-/]|glm-|zai\/glm-|deepseek-|k
 /** supported_openai_params 中表明模型可推理的参数名（OpenAI reasoning_effort / Anthropic thinking）。 */
 const REASONING_PARAM_NAMES = new Set(["reasoning_effort", "thinking"]);
 
+/**
+ * 推理模型的 thinking 配置：声明 max 级别 + 走 anthropic adaptive thinking 腿。
+ *
+ * - thinkingLevelMap 只列 max：off/minimal/low/medium/high 在 pi 的
+ *   getSupportedThinkingLevels 里默认可选（非 xhigh/max 级别默认返回 true），
+ *   xhigh 不声明（litellm 后端均不支持，pi-ai 内置 zai/kimi catalog 亦无 xhigh）。
+ * - compat.forceAdaptiveThinking 让 anthropic-messages 腿走 adaptive 分支，effort
+ *   经 output_config.effort 传给网关；否则走 budget-based，max 被 clampReasoning
+ *   压到 high、effort 不传递，max 沦为 UI 摆设。
+ * - 实测（2026-08-24）litellm glm-5.2 adaptive+effort=max 比 high 多约 70% 思考量
+ *   （679 vs 395 字符）；k3 / kimi-k2.7-code / kimi/k3 / claude-sonnet-5 同样接受
+ *   adaptive+max。其余模型为限流/权限无法实测，但网关对 adaptive 格式无拒绝
+ *   （最坏情况后端不思考，不报错）。
+ */
+const ADAPTIVE_THINKING: Pick<ProviderModelConfig, "thinkingLevelMap" | "compat"> = {
+  thinkingLevelMap: { max: "max" },
+  compat: { forceAdaptiveThinking: true },
+};
+
 /** supported_openai_params 是否声明了推理参数（研究 04：比名字正则更直接的能力信号）。 */
 function hasReasoningParam(params: string[] | null | undefined): boolean {
   return Array.isArray(params) && params.some((p) => REASONING_PARAM_NAMES.has(p));
@@ -63,6 +82,7 @@ const FALLBACK_MODELS: ProviderModelConfig[] = [
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: m.contextWindow,
   maxTokens: m.maxTokens,
+  ...ADAPTIVE_THINKING,
 }));
 
 export function fallbackModels(): ProviderModelConfig[] {
@@ -109,15 +129,19 @@ export function transformModelInfo(data: LiteLLMDeploymentEntry[] | undefined): 
     // 未声明 supports_vision 的按纯文本处理：向非多模态后端发图会 500
     const input: ("text" | "image")[] = ["text"];
     if (agg.vision) input.push("image");
+    // 推理能力优先级：网关 supports_reasoning 声明 > supported_openai_params 推理参数 > 名字正则
+    const reasoning = agg.reasoningDeclared ?? (agg.reasoningParam || REASONING_MODEL_PATTERN.test(id));
     return {
       id,
       name: id,
-      // 推理能力优先级：网关 supports_reasoning 声明 > supported_openai_params 推理参数 > 名字正则
-      reasoning: agg.reasoningDeclared ?? (agg.reasoningParam || REASONING_MODEL_PATTERN.test(id)),
+      reasoning,
       input,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: agg.maxInput ?? 200000,
       maxTokens: agg.maxOutput ?? 64000,
+      // 推理模型声明 max 思考级别并走 anthropic adaptive thinking 腿（见
+      // ADAPTIVE_THINKING）；非推理模型不加（thinkingLevelMap 缺失时 pi 仅允许 off）。
+      ...(reasoning ? ADAPTIVE_THINKING : {}),
     };
   });
 
