@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-24
+
 ### 新增
 
 - **发布供应链守护**（`scripts/supply-chain-guard.mjs`，`npm run supply-chain:guard`，CI verify/publish 均执行；移植自 balcsida 的裁剪版，调研见 `docs/wayfinder/research/08-balcsida-packaging-tamper.md`）：禁安装期脚本（`preinstall`/`install`/`postinstall`；`prepare` 保留——git 源安装的生命线）、零运行时依赖从约定升级为 CI 强制、禁非 registry 依赖 spec（`git:`/`file:`/`link:` 等）、lockfile `resolved` 域名白名单（registry.npmjs.org + github.com/jesset）、npm pack 文件白名单精确到文件名（仅 `LICENSE`/`README.md`/`dist/index.js`/`package.json`）
