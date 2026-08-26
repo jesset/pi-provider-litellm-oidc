@@ -30,6 +30,18 @@ const REASONING_PARAM_NAMES = new Set(["reasoning_effort", "thinking"]);
  * - thinkingLevelMap 只列 max：off/minimal/low/medium/high 在 pi 的
  *   getSupportedThinkingLevels 里默认可选（非 xhigh/max 级别默认返回 true），
  *   xhigh 不声明（litellm 后端均不支持，pi-ai 内置 zai/kimi catalog 亦无 xhigh）。
+ * - ⚠️ off 必须保持省略，切勿“补全”为 off: null：pi 序列化器依赖
+ *   thinkingLevelMap?.off !== null 才发送 thinking:{type:"disabled"}——若声明
+ *   off: null，disabled 通道静默关闭，所有依赖显式关思考的调用方全部遭殃
+ *   （pi 会话级 off、auto-mode 扩展的分类器 thinkingEnabled:false、CC 式
+ *   小预算分类调用）。实测：2026-08-26 thinking:{type:"disabled"} 经本网关
+ *   送达 GLM 后端并降为 effort low 轻思考（取证见 相关研究笔记
+ *   thinking-param-blackhole）。
+ * - minimal/low/medium/high 省略 = 走 pi 通用 switch（minimal/low→low、
+ *   medium→medium、high→high）作为 output_config.effort 发送：对真 Claude
+ *   后端（low/medium/high 均为原生档位）现状即正确；GLM 后端实际仅
+ *   low/high/max（medium 服务端转 high，BigModel 官方映射表），如需保真
+ *   可按模型族显式声明，但需避开对 claude 族的重映射。
  * - compat.forceAdaptiveThinking 让 anthropic-messages 腿走 adaptive 分支，effort
  *   经 output_config.effort 传给网关；否则走 budget-based，max 被 clampReasoning
  *   压到 high、effort 不传递，max 沦为 UI 摆设。
