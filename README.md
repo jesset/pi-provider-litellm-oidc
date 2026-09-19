@@ -69,6 +69,11 @@ env npm_config_registry=https://registry.npmjs.org/ \
 ### Keycloak 侧前置要求
 
 - 公共客户端，启用 OAuth 2.0 Device Authorization Grant
+- **PKCE（0.9.1 起）**：扩展的 device 授权请求携带 `code_challenge`（S256）、token
+  轮询携带 `code_verifier`（RFC 7636）。Keycloak 26 起 admin console 对 public client
+  默认强制 PKCE（client 属性 `pkceCodeChallengeMethod=S256`）——扩展已实现该基线，
+  无需在服务端关闭；旧版 Keycloak 忽略这些参数，向后兼容。报
+  `Missing parameter: code_challenge_method` 说明用 0.9.1 之前的扩展，升级即可
 - Client scope 含 `offline_access`（长时 refresh token 的必要条件）
 - LiteLLM 网关 `JWT_PUBLIC_KEY_URL` 指向该 realm 的 JWKS，`enable_jwt_auth: true`
 
