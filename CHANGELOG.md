@@ -7,6 +7,27 @@
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-09-19
+
+### 修复
+
+- **Device Flow 补齐 PKCE（RFC 7636，S256；吸收自 downstream fork 0.10.1 同款实现）**：Keycloak 26
+  起 admin console 对 public client 默认将 PKCE method 设为 S256（client 属性
+  `pkceCodeChallengeMethod`，Capability config 的 "PKCE method"），device 授权端点对
+  enforced client 校验 code_challenge——不发送 PKCE 参数的实现报 `Keycloak device
+  authorization failed: Missing parameter: code_challenge_method`（DeviceEndpoint.
+  handleDeviceRequest → AuthorizationEndpointChecker.checkPKCEParams）。现 device
+  授权请求携带 code_challenge（S256），token 轮询携带 code_verifier；每个登录会话独立
+  verifier，窃取 device_code 无法单独兑换 token。OAuth 2.1 对 public client 全 grant
+  强制 PKCE，属正确安全基线，**不应在服务端关闭该校验**。旧版 Keycloak 忽略这些参数
+  （2026-09-19 对 LiteLLM 实测：带 PKCE 参数的 device 授权请求返回 200 + device_code）。
+  refresh grant 不涉及 PKCE，不变
+
+### 测试
+
+- 新增 `test/pkce.test.ts`（+4）：S256 派生用 RFC 7636 Appendix B 官方测试向量锁定，
+  verifier 格式（43 字符 unreserved）与高熵唯一性
+
 ## [0.9.0] - 2026-08-24
 
 ### 新增

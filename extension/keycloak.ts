@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import { createHash, randomBytes } from "node:crypto";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
 import { config, keycloak } from "./config.ts";
 
@@ -66,14 +67,44 @@ async function postForm(url: string, params: Record<string, string>, signal?: Ab
   return payload;
 }
 
+/**
+ * RFC 7636 PKCE：Keycloak 26 起 admin console 对 public client 默认将 PKCE method
+ * 设为 S256（client 属性 `pkceCodeChallengeMethod`，Capability config 的 "PKCE method"），
+ * device 授权端点对 PKCE-enforced client 校验 code_challenge/code_challenge_method
+ * （DeviceEndpoint.handleDeviceRequest → AuthorizationEndpointChecker.checkPKCEParams），
+ * 缺参报 "Missing parameter: code_challenge_method"。OAuth 2.1 对 public client 全
+ * grant 强制 PKCE，属正确安全基线，不应在服务端关闭——扩展自 0.9.1 起实现 PKCE：
+ * device 授权请求带 code_challenge（S256），token 轮询带 code_verifier。旧版
+ * Keycloak 忽略这些参数，向后兼容（LiteLLM 当前部署同样可用）。
+ */
+
+/** RFC 7636 §4.2 S256：challenge = BASE64URL(SHA256(ASCII(verifier)))。 */
+export function pkceChallenge(verifier: string): string {
+  return createHash("sha256").update(verifier, "utf8").digest("base64url");
+}
+
+/** RFC 7636 §4.1：verifier 用高熵随机生成，43 字符（32 字节 base64url）。 */
+export function generateCodeVerifier(): string {
+  return randomBytes(32).toString("base64url");
+}
+
 /** RFC 8628 Device Authorization Flow against Keycloak. */
 export async function loginDeviceFlow(callbacks: LoginCallbacks): Promise<OAuthCredentials> {
   const signal = callbacks.signal;
 
+  // PKCE（见上文）：每个 device flow 会话独立 verifier，challenge 随授权请求发出，
+  // verifier 在 token 轮询时兑现——窃取 device_code 无法单独兑换 token
+  const codeVerifier = generateCodeVerifier();
+
   const deviceRes = await fetch(keycloak.deviceEndpoint, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ client_id: config.keycloakClientId, scope: config.keycloakScope }).toString(),
+    body: new URLSearchParams({
+      client_id: config.keycloakClientId,
+      scope: config.keycloakScope,
+      code_challenge: pkceChallenge(codeVerifier),
+      code_challenge_method: "S256",
+    }).toString(),
     signal,
   });
   const device = (await deviceRes.json()) as DeviceAuthorizationResponse;
@@ -128,6 +159,7 @@ export async function loginDeviceFlow(callbacks: LoginCallbacks): Promise<OAuthC
         grant_type: "urn:ietf:params:oauth:grant-type:device_code",
         client_id: config.keycloakClientId,
         device_code: device.device_code,
+        code_verifier: codeVerifier,
       },
       signal,
     ).catch((err: unknown) => {
