@@ -309,6 +309,110 @@ describe("transformModelInfo — 多 deployment 能力聚合 any→all", () => {
 });
 
 // ---------------------------------------------------------------------------
+// v0.12.0：thinking 档位自动推导（网关元数据权威，ADR 0001）。
+// 四级回落链：reasoning_effort_levels > per-level 布尔 > 现三级链。
+// wire 策略（2026-09-20 实测定案）：forceAdaptiveThinking 是 effort 传递通道
+// （effort 值与档位枚举同构，budget 路径无法表达档位），对所有 reasoning 模型
+// 保留；hack 的收缩落点在 thinkingLevelMap 来源分化——有精确档位从 levels
+// 生成（edge 档位 xhigh/max 进 map、off 恒省略、low~high 走 pi 默认拼写），
+// 无精确档位维持现状常量 {max}。
+// ---------------------------------------------------------------------------
+
+describe("transformModelInfo — reasoning_effort_levels 档位推导", () => {
+  it("levels 存在即推理能力：reasoning=true 且 forceAdaptiveThinking 注入", () => {
+    const models = transformModelInfo([
+      { model_name: "smart", model_info: { reasoning_effort_levels: ["low", "high", "max"] } },
+    ]);
+    const m = byId(models)["smart"];
+    expect(m.reasoning).toBe(true);
+    expect(m.compat?.forceAdaptiveThinking).toBe(true);
+  });
+
+  it("levels 含 max → thinkingLevelMap 声明 max（值=effort 直传）+ off:null（无 none 档=后端不支持关思考，glm-5.3 强制思考边界）；low/high 省略走 pi 默认拼写", () => {
+    const models = transformModelInfo([
+      { model_name: "z-ai/glm-5.3", model_info: { reasoning_effort_levels: ["low", "high", "max"] } },
+    ]);
+    const map = byId(models)["z-ai/glm-5.3"].thinkingLevelMap;
+    expect(map).toEqual({ max: "max", off: null });
+  });
+
+  it("levels 含 xhigh → 一并声明（通用 edge 档处理，当前网关无此形态）", () => {
+    const models = transformModelInfo([
+      { model_name: "m", model_info: { reasoning_effort_levels: ["low", "high", "xhigh", "max"] } },
+    ]);
+    expect(byId(models)["m"].thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max", off: null });
+  });
+
+  it("levels 含 none → off 省略（后端支持关思考，默认可选）", () => {
+    const models = transformModelInfo([
+      { model_name: "m", model_info: { reasoning_effort_levels: ["none", "low", "high", "max"] } },
+    ]);
+    const map = byId(models)["m"].thinkingLevelMap as Record<string, unknown>;
+    expect(map).toEqual({ max: "max" });
+    expect(map).not.toHaveProperty("off");
+  });
+
+  it("levels 无 edge 档（low~high 全默认可选）→ thinkingLevelMap 仅含 off:null（无 none 档同样不支持关思考）", () => {
+    const models = transformModelInfo([
+      { model_name: "m", model_info: { reasoning_effort_levels: ["low", "medium", "high"] } },
+    ]);
+    expect(byId(models)["m"].thinkingLevelMap).toEqual({ off: null });
+    expect(byId(models)["m"].compat?.forceAdaptiveThinking).toBe(true);
+  });
+
+  it("levels 存在时无视 supports_reasoning 显式 false？不——显式 false 仍一票否决（回落链是能力判定，声明权威）", () => {
+    const models = transformModelInfo([
+      { model_name: "m", model_info: { supports_reasoning: false, reasoning_effort_levels: ["low", "high", "max"] } },
+    ]);
+    const m = byId(models)["m"];
+    expect(m.reasoning).toBe(false);
+    expect(m.thinkingLevelMap).toBeUndefined();
+    expect(m.compat).toBeUndefined();
+  });
+
+  it("per-level 布尔（supports_*_reasoning_effort，LiteLLM 仅 none/minimal/low/xhigh/max 有布尔，medium/high 是默认档）拼装为档位集（levels 缺失时的第二级）", () => {
+    const models = transformModelInfo([
+      {
+        model_name: "m",
+        model_info: {
+          supports_xhigh_reasoning_effort: true,
+          supports_max_reasoning_effort: true,
+        },
+      },
+    ]);
+    expect(byId(models)["m"].thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max", off: null });
+  });
+
+  it("per-level 布尔全缺 → 落回现三级链（名字正则模型维持 hack 兜底 {max}）", () => {
+    const models = transformModelInfo([
+      { model_name: "glm-5.2", model_info: {} },
+    ]);
+    const m = byId(models)["glm-5.2"];
+    expect(m.reasoning).toBe(true);
+    expect(m.thinkingLevelMap).toEqual({ max: "max" });
+    expect(m.compat?.forceAdaptiveThinking).toBe(true);
+  });
+
+  it("同名多 deployment levels 取交集（all-true 精神：只宣传轮询组全部支持的档位）", () => {
+    const models = transformModelInfo([
+      { model_name: "m", model_info: { reasoning_effort_levels: ["low", "high", "max"] } },
+      { model_name: "m", model_info: { reasoning_effort_levels: ["low", "high"] } },
+    ]);
+    expect(byId(models)["m"].thinkingLevelMap).toEqual({ off: null }); // 交集无 edge 档，仅 off 声明
+  });
+
+  it("非推理模型（无声明且名字不匹配）不受影响", () => {
+    const models = transformModelInfo([
+      { model_name: "smart", model_info: {} },
+    ]);
+    const m = byId(models)["smart"];
+    expect(m.reasoning).toBe(false);
+    expect(m.thinkingLevelMap).toBeUndefined();
+    expect(m.compat).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // B 项（balcsida v3.1.0 吸收）：/model/info 成本字段填 model.cost。
 // 请求前估算（模型选择 UI / 预算控制）此前恒为 0；与响应后口径的
 // x-litellm-response-cost 实付跟踪互补。用例数据取自 2026-09-20 网关实测
