@@ -309,13 +309,14 @@ describe("transformModelInfo — 多 deployment 能力聚合 any→all", () => {
 });
 
 // ---------------------------------------------------------------------------
-// v0.12.0：thinking 档位自动推导（网关元数据权威，ADR 0001）。
+// v0.10.0 起：thinking 档位自动推导（网关元数据权威，ADR 0001）。
 // 四级回落链：reasoning_effort_levels > per-level 布尔 > 现三级链。
-// wire 策略（2026-09-20 实测定案）：forceAdaptiveThinking 是 effort 传递通道
-// （effort 值与档位枚举同构，budget 路径无法表达档位），对所有 reasoning 模型
-// 保留；hack 的收缩落点在 thinkingLevelMap 来源分化——有精确档位从 levels
-// 生成（edge 档位 xhigh/max 进 map、off 恒省略、low~high 走 pi 默认拼写），
-// 无精确档位维持现状常量 {max}。
+// v0.10.1 起菜单精确对齐：有档位时 thinkingLevelMap 是网关档集的镜像——
+// 档集内声明自身值（选什么发什么 effort），档集外的默认可选档以 null 显式
+// 排除（pi 的 mapped===null 是通用菜单排除机制），edge 档（xhigh/max）档集
+// 含才声明（pi 默认不可选），未知档名忽略；无档位（或同名组交集为空）维持
+// 兜底 {max}。forceAdaptiveThinking 对所有 reasoning 模型保留（effort 传递
+// 通道，budget 路径无法表达档位枚举）。
 // ---------------------------------------------------------------------------
 
 describe("transformModelInfo — reasoning_effort_levels 档位推导", () => {
@@ -328,36 +329,75 @@ describe("transformModelInfo — reasoning_effort_levels 档位推导", () => {
     expect(m.compat?.forceAdaptiveThinking).toBe(true);
   });
 
-  it("levels 含 max → thinkingLevelMap 声明 max（值=effort 直传）+ off:null（无 none 档=后端不支持关思考，glm-5.3 强制思考边界）；low/high 省略走 pi 默认拼写", () => {
+  it("精确对齐：['low','high','max']（glm-5.3 形态）→ off/minimal/medium 以 null 排除，low/high/max 声明自身值", () => {
     const models = transformModelInfo([
       { model_name: "z-ai/glm-5.3", model_info: { reasoning_effort_levels: ["low", "high", "max"] } },
     ]);
     const map = byId(models)["z-ai/glm-5.3"].thinkingLevelMap;
-    expect(map).toEqual({ max: "max", off: null });
+    expect(map).toEqual({ off: null, minimal: null, low: "low", medium: null, high: "high", max: "max" });
   });
 
-  it("levels 含 xhigh → 一并声明（通用 edge 档处理，当前网关无此形态）", () => {
+  it("精确对齐：levels 含 xhigh → 一并声明（通用 edge 档处理，当前网关无此形态）", () => {
     const models = transformModelInfo([
       { model_name: "m", model_info: { reasoning_effort_levels: ["low", "high", "xhigh", "max"] } },
     ]);
-    expect(byId(models)["m"].thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max", off: null });
+    expect(byId(models)["m"].thinkingLevelMap).toEqual({
+      off: null,
+      minimal: null,
+      low: "low",
+      medium: null,
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    });
   });
 
-  it("levels 含 none → off 省略（后端支持关思考，默认可选）", () => {
+  it("精确对齐：levels 含 none（deepseek-flash 形态）→ off:\"off\" 可选（序列化器只查 off !== null 才发 disabled）", () => {
     const models = transformModelInfo([
       { model_name: "m", model_info: { reasoning_effort_levels: ["none", "low", "high", "max"] } },
     ]);
-    const map = byId(models)["m"].thinkingLevelMap as Record<string, unknown>;
-    expect(map).toEqual({ max: "max" });
-    expect(map).not.toHaveProperty("off");
+    expect(byId(models)["m"].thinkingLevelMap).toEqual({
+      off: "off",
+      minimal: null,
+      low: "low",
+      medium: null,
+      high: "high",
+      max: "max",
+    });
   });
 
-  it("levels 无 edge 档（low~high 全默认可选）→ thinkingLevelMap 仅含 off:null（无 none 档同样不支持关思考）", () => {
+  it("精确对齐：minimal 在档集 → 直传自身值（不走 pi 序列化 switch 的 minimal→low 近似）；档集不含 low 也不外溢", () => {
+    const models = transformModelInfo([
+      { model_name: "m", model_info: { reasoning_effort_levels: ["minimal", "high"] } },
+    ]);
+    expect(byId(models)["m"].thinkingLevelMap).toEqual({
+      off: null,
+      minimal: "minimal",
+      low: null,
+      medium: null,
+      high: "high",
+    });
+  });
+
+  it("levels 无 edge 档（['low','medium','high']）→ 默认档照常对齐，map 不含 xhigh/max 键（pi 默认不可选，无需声明）", () => {
     const models = transformModelInfo([
       { model_name: "m", model_info: { reasoning_effort_levels: ["low", "medium", "high"] } },
     ]);
-    expect(byId(models)["m"].thinkingLevelMap).toEqual({ off: null });
+    expect(byId(models)["m"].thinkingLevelMap).toEqual({ off: null, minimal: null, low: "low", medium: "medium", high: "high" });
     expect(byId(models)["m"].compat?.forceAdaptiveThinking).toBe(true);
+  });
+
+  it("未知档名忽略（LiteLLM 同款先例：丢弃而非报错）；过滤后全未知 → 视同未声明回落 {max} 兜底", () => {
+    const mixed = transformModelInfo([
+      { model_name: "m1", model_info: { reasoning_effort_levels: ["turbo", "low", "high"] } },
+    ]);
+    expect(byId(mixed)["m1"].thinkingLevelMap).toEqual({ off: null, minimal: null, low: "low", medium: null, high: "high" });
+
+    const allUnknown = transformModelInfo([
+      { model_name: "glm-x", model_info: { reasoning_effort_levels: ["turbo", "ultra"] } },
+    ]);
+    expect(byId(allUnknown)["glm-x"].reasoning).toBe(true); // 名字正则兜底判推理
+    expect(byId(allUnknown)["glm-x"].thinkingLevelMap).toEqual({ max: "max" });
   });
 
   it("levels 存在时无视 supports_reasoning 显式 false？不——显式 false 仍一票否决（回落链是能力判定，声明权威）", () => {
@@ -370,7 +410,7 @@ describe("transformModelInfo — reasoning_effort_levels 档位推导", () => {
     expect(m.compat).toBeUndefined();
   });
 
-  it("per-level 布尔（supports_*_reasoning_effort，LiteLLM 仅 none/minimal/low/xhigh/max 有布尔，medium/high 是默认档）拼装为档位集（levels 缺失时的第二级）", () => {
+  it("per-level 布尔（supports_*_reasoning_effort，LiteLLM 仅 none/minimal/low/xhigh/max 有布尔，medium/high 是默认档）拼装为档位集后照常对齐（levels 缺失时的第二级）", () => {
     const models = transformModelInfo([
       {
         model_name: "m",
@@ -380,7 +420,15 @@ describe("transformModelInfo — reasoning_effort_levels 档位推导", () => {
         },
       },
     ]);
-    expect(byId(models)["m"].thinkingLevelMap).toEqual({ xhigh: "xhigh", max: "max", off: null });
+    expect(byId(models)["m"].thinkingLevelMap).toEqual({
+      off: null,
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    });
   });
 
   it("per-level 布尔全缺 → 落回现三级链（名字正则模型维持 hack 兜底 {max}）", () => {
@@ -398,7 +446,17 @@ describe("transformModelInfo — reasoning_effort_levels 档位推导", () => {
       { model_name: "m", model_info: { reasoning_effort_levels: ["low", "high", "max"] } },
       { model_name: "m", model_info: { reasoning_effort_levels: ["low", "high"] } },
     ]);
-    expect(byId(models)["m"].thinkingLevelMap).toEqual({ off: null }); // 交集无 edge 档，仅 off 声明
+    expect(byId(models)["m"].thinkingLevelMap).toEqual({ off: null, minimal: null, low: "low", medium: null, high: "high" }); // 交集 ['low','high']，max 被交掉
+  });
+
+  it("同名组档位交集为空 → 视同未声明，回落 {max} 兜底（v0.10.1 修复：此前会产出 {off:null}，菜单只剩 off 连 max 都消失）", () => {
+    const models = transformModelInfo([
+      { model_name: "glm-x", model_info: { reasoning_effort_levels: ["low", "high"] } },
+      { model_name: "glm-x", model_info: { reasoning_effort_levels: ["minimal", "medium"] } },
+    ]);
+    const m = byId(models)["glm-x"];
+    expect(m.reasoning).toBe(true); // 名字正则兜底判推理
+    expect(m.thinkingLevelMap).toEqual({ max: "max" });
   });
 
   it("非推理模型（无声明且名字不匹配）不受影响", () => {

@@ -20,7 +20,7 @@ interface LiteLLMDeploymentEntry {
     output_cost_per_token?: number | null;
     cache_read_input_token_cost?: number | null;
     cache_creation_input_token_cost?: number | null;
-    /** 网关声明的完整档位集（v0.12.0 回落链第一级） */
+    /** 网关声明的完整档位集（v0.10.0 回落链第一级） */
     reasoning_effort_levels?: string[] | null;
     /** per-level 布尔（回落链第二级）：LiteLLM 仅对非默认档暴露布尔
      *  （none/minimal/low/xhigh/max；medium/high 是默认档无布尔），其中只有
@@ -73,17 +73,28 @@ function hasReasoningParam(params: string[] | null | undefined): boolean {
 }
 
 /**
- * 从 deployment 的 model_info 解析档位集（v0.12.0 回落链的档位数据级）：
+ * LiteLLM `REASONING_EFFORT` 档位全集（types/llms/openai.py）。与 pi 思考级别七档
+ * 一一对应，唯一命名差异是网关 `none` ↔ pi `off`。档位集之外的未知档名忽略——
+ * LiteLLM 对未知 level 同样丢弃而非报错（router_utils/reasoning_effort_capability.py）。
+ */
+const KNOWN_EFFORT_LEVELS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+/**
+ * 从 deployment 的 model_info 解析档位集（v0.10.0 回落链的档位数据级）：
  * `reasoning_effort_levels`（完整档集，优先）> per-level 布尔拼装（xhigh/max 布尔
- * 叠加在 pi 默认档 minimal~high 之上）。均缺失返回 null（落能力声明链）。
- * `none` 是档位集合法成员——参与交集与 off 判定（levels 含 none = 后端支持关思考）；
- * 但不作为 pi 思考级别枚举输出（off 由 thinkingLevelMap.off 单独表达）。
+ * 叠加在 pi 默认档 minimal~high 之上）。均缺失（或过滤未知档后为空）返回 null
+ * （落能力声明链）。`none` 是档位集合法成员——参与交集与 off 判定（levels 含
+ * none = 后端支持关思考）；但不作为 pi 思考级别枚举输出（off 由 thinkingLevelMap
+ * 的 off 键单独表达）。
  */
 function resolveEffortLevels(
   info: NonNullable<Pick<LiteLLMDeploymentEntry, "model_info">["model_info"]>,
 ): string[] | null {
   const levels = info.reasoning_effort_levels;
-  if (Array.isArray(levels) && levels.length > 0) return levels;
+  if (Array.isArray(levels) && levels.length > 0) {
+    const known = levels.filter((l) => KNOWN_EFFORT_LEVELS.has(l));
+    return known.length > 0 ? known : null;
+  }
   const xhigh = info.supports_xhigh_reasoning_effort === true;
   const max = info.supports_max_reasoning_effort === true;
   if (xhigh || max) {
@@ -97,6 +108,19 @@ function resolveEffortLevels(
 
 /** pi 思考级别菜单中需要 thinkingLevelMap 显式声明的 edge 档（其余默认可选）。 */
 const EDGE_THINKING_LEVELS = new Set(["xhigh", "max"]);
+
+/**
+ * pi 默认可选（非 edge）的思考档。菜单精确对齐（v0.10.1，ADR 0001）时，网关档集
+ * 含对应档则声明为自身值（选什么发什么 effort），不含则以 null 显式排除。
+ * `gateway` 是该档在网关 `reasoning_effort_levels` 里的名字（off ↔ none）。
+ */
+const DEFAULT_THINKING_LEVELS: ReadonlyArray<{ pi: string; gateway: string }> = [
+  { pi: "off", gateway: "none" },
+  { pi: "minimal", gateway: "minimal" },
+  { pi: "low", gateway: "low" },
+  { pi: "medium", gateway: "medium" },
+  { pi: "high", gateway: "high" },
+];
 
 /**
  * /model/info 显式声明的非 chat 模式，直接排除。
@@ -217,7 +241,7 @@ export function transformModelInfo(data: LiteLLMDeploymentEntry[] | undefined): 
     // vision all-true 才宣传多模态（见聚合处注释）
     const input: ("text" | "image")[] = ["text"];
     if (agg.vision) input.push("image");
-    // 推理能力四级回落链（v0.12.0，ADR 0001）：supports_reasoning 声明层三态 >
+    // 推理能力四级回落链（v0.10.0，ADR 0001）：supports_reasoning 声明层三态 >
     // reasoning_effort_levels（档位存在即推理）> supported_openai_params > 名字正则
     const reasoningDeclared = agg.sawReasoningFalse
       ? false
@@ -226,36 +250,45 @@ export function transformModelInfo(data: LiteLLMDeploymentEntry[] | undefined): 
         : undefined;
     const reasoning = reasoningDeclared
       ?? ((agg.effortLevels?.length ?? 0) > 0 || agg.reasoningParam || REASONING_MODEL_PATTERN.test(id));
-    // thinkingLevelMap 来源分化（v0.12.0）：有精确档位时从 levels 生成 edge 声明
-    // （xhigh/max，值=effort 直传；minimal~high 省略走 pi 默认拼写）；off 按据声明
-    // （levels 无 none → off:null，见下方注释；无据时省略）。无档位声明维持 hack
-    // 兜底 {max}。forceAdaptiveThinking 对所有推理模型保留——它是 effort 传递的
-    // wire 通道（effort 值与档位枚举同构，budget 路径无法表达档位枚举；
-    // downstream fork 2026-09-20 anthropic 端点实测 adaptive 形态被接受且 effort 语义生效）。
+    // thinkingLevelMap 来源分化（v0.10.0）：无档位声明维持 hack 兜底 {max}；有精确
+    // 档位时菜单精确对齐（v0.10.1，ADR 0001）——map 是网关档集的镜像：
+    // - 档集内的档声明为自身值：选什么发什么 effort（minimal 直传，不再走 pi 序列化
+    //   switch 的 minimal→low claude 族近似——那是无声明场景的兜底）；off 走
+    //   disabled 通道不涉及 effort 值
+    // - 档集外的默认可选档（off/minimal/low/medium/high）以 null 显式排除：pi
+    //   getSupportedThinkingLevels 的 mapped===null 是通用菜单排除机制（非 off 专属），
+    //   排除后选不到、序列化层走不到（残留值经 clampThinkingLevel 调到最近可用档）
+    // - edge 档（xhigh/max）pi 要求显式声明才可选：档集含则声明自身，不含则不声明
+    //   （天然不可选，无需 null）
+    // - 网关 none 档即 pi 的 off：档集含 none → off:"off"（序列化器只检查
+    //   off !== null 才发 thinking:{type:"disabled"}，字符串值即可）；不含 → off:null
+    //   （不发 disabled——对强制思考后端会 4xx，显式 off 请求 clamp 到最低档）。
+    //   v0.8.0 的 off:null "黑洞"陷阱只在无据盲目补全时成立，档集声明正是依据
+    // - 同名组档位交集为空视同未声明（回落兜底）：档位声明不相交几乎必然是网关配置
+    //   错误，砍到只剩 off 比维持兜底伤害更大
+    // forceAdaptiveThinking 对所有推理模型保留——它是 effort 传递的 wire 通道
+    // （effort 值与档位枚举同构，budget 路径无法表达档位枚举；downstream fork
+    // 2026-09-20 anthropic 端点实测 adaptive 形态被接受且 effort 语义生效）。
     let thinking: Pick<ProviderModelConfig, "thinkingLevelMap" | "compat"> | undefined;
     if (reasoning) {
       const levels = agg.effortLevels;
-      let map: Record<string, string | null> | undefined;
-      if (levels === null) {
-        map = { max: "max" }; // 无档位声明 → hack 兜底（off 省略，维持现状）
+      let map: Record<string, string | null>;
+      if (!levels || levels.length === 0) {
+        map = { max: "max" }; // 无档位声明（或同名组交集为空）→ hack 兜底（off 省略，维持现状）
       } else {
-        const entries: [string, string | null][] = levels
-          .filter((l) => EDGE_THINKING_LEVELS.has(l))
-          .map((l) => [l, l]);
-        // 后端不支持关思考（levels 无 none 档，如 glm-5.3 / kimi-k3 官方三档）声明
-        // off:null——菜单层移除 off（pi getSupportedThinkingLevels 的 mapped===null
-        // 排除）+ 序列化层不再发 thinking:{type:"disabled"}（对强制思考后端会 4xx）、
-        // 显式 off 请求被 clamp 到最低档。v0.8.0 的 off:null "黑洞"陷阱只在**无依据
-        // 盲目补全**时成立；网关 levels 无 none 正是依据。levels 含 none 时 off 省略
-        // （后端支持关思考，默认可选）。
-        if (!levels.includes("none")) entries.push(["off", null] as const);
-        map = entries.length > 0 ? Object.fromEntries(entries) : undefined;
+        const entries: [string, string | null][] = DEFAULT_THINKING_LEVELS.map(({ pi, gateway }) =>
+          levels.includes(gateway) ? [pi, pi] : [pi, null],
+        );
+        for (const edge of EDGE_THINKING_LEVELS) {
+          if (levels.includes(edge)) entries.push([edge, edge]);
+        }
+        map = Object.fromEntries(entries);
       }
       // pi 的 thinkingLevelMap 类型声明为 Record<string,string>，但运行时序列化器
       // 明确检查 `?.off !== null`（v0.8.0 取证）——null 是其支持的运行时形状，
       // 上游类型声明不完整，此处断言越过
       thinking = {
-        ...(map ? { thinkingLevelMap: map as unknown as ProviderModelConfig["thinkingLevelMap"] } : {}),
+        thinkingLevelMap: map as unknown as ProviderModelConfig["thinkingLevelMap"],
         compat: ADAPTIVE_THINKING.compat,
       };
     }
