@@ -84,6 +84,32 @@ export const keycloak = {
 };
 
 /**
+ * 网关 / IdP URL 的 HTTPS 强制校验（吸收自 balcsida v3.1.0 normalizeBaseUrl）。
+ * 误配 http:// 会让 access token（JWT）与 refresh token 明文过线——在模块加载时
+ * fail-fast；唯一例外是 loopback 主机（本地调试代理）。
+ */
+export function assertSecureUrl(name: string, url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`${name} 不是合法 URL: ${url}`);
+  }
+  const loopback =
+    parsed.hostname === "localhost" ||
+    parsed.hostname.startsWith("127.") ||
+    parsed.hostname === "[::1]" ||
+    parsed.hostname === "::1";
+  if (parsed.protocol === "https:" || (parsed.protocol === "http:" && loopback)) return;
+  throw new Error(
+    `${name} 必须使用 https（当前 ${url}）：http 会明文发送 JWT 与 refresh token，仅 loopback 主机例外`,
+  );
+}
+
+assertSecureUrl("LITELLM_OIDC_GATEWAY_URL", config.gatewayBaseUrl);
+assertSecureUrl("LITELLM_OIDC_KEYCLOAK_URL", config.keycloakBaseUrl);
+
+/**
  * 模型目录数据源用 /model/info 而非 /v1/models：返回 deployment 级 DB 实配值
  * （token limits、supports_vision、mode），而 /v1/models 的这些字段来自 LiteLLM
  * 静态 cost map 按公开名查找，自研/别名模型一律缺失。需网关将其列入

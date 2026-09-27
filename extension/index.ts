@@ -13,7 +13,7 @@ const oauth: NonNullable<ProviderConfig["oauth"]> = {
   },
 
   async refreshToken(credentials: OAuthCredentials, signal: AbortSignal): Promise<OAuthCredentials> {
-    return refreshAccessToken(credentials.refresh, signal);
+    return refreshAccessToken(credentials, signal);
   },
 
   getApiKey(credentials: OAuthCredentials): string {
