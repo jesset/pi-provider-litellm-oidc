@@ -73,16 +73,15 @@ function hasReasoningParam(params: string[] | null | undefined): boolean {
 }
 
 /**
- * 从 deployment 的 model_info 解析档位集（v0.12.0 四级回落链的前两级）：
+ * 从 deployment 的 model_info 解析档位集（v0.12.0 回落链的档位数据级）：
  * `reasoning_effort_levels`（完整档集，优先）> per-level 布尔拼装（xhigh/max 布尔
- * 叠加在 pi 默认档 minimal~high 之上）。均缺失返回 null（落三级链）。
- * off/none 是 pi 序列化器红线档（off-null 陷阱），不参与档位集。
+ * 叠加在 pi 默认档 minimal~high 之上）。均缺失返回 null（落能力声明链）。
+ * `none` 是档位集合法成员——参与交集与 off 判定（levels 含 none = 后端支持关思考）；
+ * 但不作为 pi 思考级别枚举输出（off 由 thinkingLevelMap.off 单独表达）。
  */
-function resolveEffortLevels(info: {
-  reasoning_effort_levels?: string[] | null;
-  supports_xhigh_reasoning_effort?: boolean | null;
-  supports_max_reasoning_effort?: boolean | null;
-}): string[] | null {
+function resolveEffortLevels(
+  info: NonNullable<Pick<LiteLLMDeploymentEntry, "model_info">["model_info"]>,
+): string[] | null {
   const levels = info.reasoning_effort_levels;
   if (Array.isArray(levels) && levels.length > 0) return levels;
   const xhigh = info.supports_xhigh_reasoning_effort === true;
@@ -228,11 +227,11 @@ export function transformModelInfo(data: LiteLLMDeploymentEntry[] | undefined): 
     const reasoning = reasoningDeclared
       ?? ((agg.effortLevels?.length ?? 0) > 0 || agg.reasoningParam || REASONING_MODEL_PATTERN.test(id));
     // thinkingLevelMap 来源分化（v0.12.0）：有精确档位时从 levels 生成 edge 声明
-    // （xhigh/max；⚠️ off 恒省略——pi 序列化器 off-null 陷阱红线；minimal~high 走
-    // pi 默认拼写）；无档位声明维持 hack 兜底 {max}。forceAdaptiveThinking 对所有
-    // 推理模型保留——它是 effort 传递的 wire 通道（effort 值与档位枚举同构，
-    // budget 路径无法表达档位枚举；downstream fork 2026-09-20 anthropic 端点实测
-    // adaptive 形态被接受且 effort 语义生效）。
+    // （xhigh/max，值=effort 直传；minimal~high 省略走 pi 默认拼写）；off 按据声明
+    // （levels 无 none → off:null，见下方注释；无据时省略）。无档位声明维持 hack
+    // 兜底 {max}。forceAdaptiveThinking 对所有推理模型保留——它是 effort 传递的
+    // wire 通道（effort 值与档位枚举同构，budget 路径无法表达档位枚举；
+    // downstream fork 2026-09-20 anthropic 端点实测 adaptive 形态被接受且 effort 语义生效）。
     let thinking: Pick<ProviderModelConfig, "thinkingLevelMap" | "compat"> | undefined;
     if (reasoning) {
       const levels = agg.effortLevels;
