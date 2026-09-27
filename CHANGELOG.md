@@ -7,6 +7,19 @@
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-27
+
+### 修复
+
+- **思考菜单与网关档位声明精确对齐**（ADR `docs/adr/0001`）：网关 `reasoning_effort_levels` 已声明时，thinkingLevelMap 成为档集的镜像——档集内的档声明为自身值（选什么发什么 effort，minimal 直传，不再走 pi 序列化 switch 的 minimal→low 近似）；档集外的默认可选档（off/minimal/low/medium/high）以 `null` 显式排除（pi 的 `mapped === null` 是通用菜单排除机制，非 off 专属）；网关 `none` 档即 pi 的 off（含则 `off:"off"` 可选，不含则 `off:null`）；未知档名忽略（LiteLLM 对未知 level 同样丢弃）。此前档集外的 minimal/medium 仍出现在菜单（0.10.0 已知缝隙）。v0.8.0 的 off-null 黑洞陷阱仅在无据盲目补全时成立，档集声明正是依据
+- **同名组档位交集为空视同未声明**：回落 `{max}` 兜底。修复 0.10.0 的边界缺陷——档位声明过但交集为空且 reasoning 经名字正则判 true 时会产出 `{off:null}`，菜单只剩 off、连 max 都消失
+- 新增域文档：`CONTEXT.md`（术语表）与 `docs/adr/0001`（本决策），同时补上 CLAUDE.md 对二者的既有引用
+
+### 测试
+
+- `bun test` 90 个用例（+3）：minimal 直传与档集不含 low 不外溢、未知档忽略/全未知回落兜底、交集为空回落兜底；改写 6 个档位用例为精确对齐断言
+- 真实数据 dry-run（66 deployment）：glm/k3/claude 系 12 模型菜单 `[low,high,max]`，deepseek-flash `[off,low,high,max]`，档集内档 effort 全部直传自身值
+
 ## [0.10.0] - 2026-09-27
 
 吸收自 downstream fork（v0.11.0/v0.12.0 的三项演进，代码逻辑原样吸收，组织特定部署设定不吸收；该 fork 为本仓库 v0.9.1 的快照分支，git 历史独立故手工搬运）。
