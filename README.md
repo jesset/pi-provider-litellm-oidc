@@ -104,6 +104,10 @@ env npm_config_registry=https://registry.npmjs.org/ \
 
 环境变量写法：`~/.pi/agent/settings.json` 的 `env` 块、shell profile、或启动时 `LITELLM_OIDC_...=... pi`。
 
+> **HTTPS 强制（v0.10.0 起）**：`LITELLM_OIDC_GATEWAY_URL` 与 `LITELLM_OIDC_KEYCLOAK_URL` 必须使用 `https://`——误配 `http://` 会让 JWT 与 refresh token 明文过线，扩展在加载时直接报错（fail-fast）；唯一例外是 loopback 主机（`localhost` / `127.x` / `[::1]`，本地调试代理）。
+>
+> **refresh 瞬态失败 backoff（v0.10.0 起）**：Keycloak 瞬断/限流时，Pi credential lock 后排队的刷新调用会形成惊群（每次都再打 token endpoint）。扩展按 refresh token keyed 记 5s backoff 窗口，窗口内直接返回未过期的旧凭据；仅瞬态异常（网络/解析层）记录 backoff，OAuth 语义错误（如 `invalid_grant`）照常抛出强制重新 `/login`，旧 token 已过期时不 backoff（立即重试）。
+
 ### 多实例示例
 
 为另一套环境（如 staging 网关）同时注册第二个 provider：
@@ -176,9 +180,11 @@ pi
 - 网络刷新成功的目录经 `context.publish({ persist })` 持久化到 `~/.pi/agent/models-store.json`，之后离线启动直接恢复真实目录，不再请求网关
 - `refreshModels` 遵守框架两阶段刷新协议：`allowNetwork=false`（扩展注册、每次 refresh 的 phase 1）零网络请求；网络阶段从 `context.credential` 取已刷新的 access token 调 `/model/info`（尊重框架 abort signal 与本地 15s 超时）
 - 数据源用 `/model/info` 而非 `/v1/models`：前者返回 deployment 级 DB 实配值（token limits、`supports_vision`、mode），后者的这些字段来自 LiteLLM 静态 cost map 按公开模型名查找——自研/别名模型（如 `kimi-k2.7-code`）一律缺失，会被误滤掉。要求网关把 `/model/info` 列入 `public_routes`（用户 JWT 可访问）
-- 过滤规则：剔除 `mode` 显式为 embedding/rerank/image_generation 的条目（mode 缺失是自研模型常态，不据此排除）；隐藏 `staging/` 前缀（网关内部命名空间）与 `-openai` 后缀（OpenAI 协议腿孪生，与 anthropic 腿重复）的内部条目；同名多 deployment 聚合为一条（字段取首个非空值）；`input` 按 `supports_vision` 决定是否含 image（未声明按纯文本，向非多模态后端发图会 500）
-- `reasoning` 三级优先推断：网关 `supports_reasoning` 布尔优先（显式 true/false 均覆盖名字正则）→ `supported_openai_params` 含 `reasoning_effort`/`thinking` → 名字前缀正则 `REASONING_MODEL_PATTERN` 兜底（覆盖稀疏模型）
-- `max` 思考级别：每个 `reasoning=true` 的模型附加 `thinkingLevelMap: { max: "max" }` + `compat.forceAdaptiveThinking`，让 pi 思考级别菜单出现 max 且 effort=max 真正经 anthropic adaptive thinking（`output_config.effort`）传给网关。否则 max 被 `clampReasoning` 压到 high、走 budget-based、effort 不传递，沦为 UI 摆设。xhigh 不声明（litellm 后端不支持）。实测 glm-5.2 max 比 high 多约 70% 思考量；副作用：low/medium/high 从 budget-based 改为 effort-based（与 kimi/k3 官方配置一致）
+- 过滤规则：剔除 `mode` 显式为 embedding/rerank/image_generation 的条目（mode 缺失是自研模型常态，不据此排除）；隐藏 `staging/` 前缀（网关内部命名空间）与 `-openai` 后缀（OpenAI 协议腿孪生，与 anthropic 腿重复）的内部条目；同名多 deployment 聚合为一条（token 上限等标量字段取首个非空值，成本字段取 max 保守上界）
+- 能力聚合 all-true（v0.10.0 起）：LiteLLM 同名组按 deployment 轮询，`supports_vision` 需全部 deployment 显式支持才宣传（未声明当不支持——轮到不支持的后端发图会 500）；`supports_reasoning` 任一显式 false 一票否决、全部显式 true 才直出、未声明混合回落兜底链。`input` 按 vision 判定决定是否含 image
+- `model.cost` 从 `/model/info` 的 4 个 per-token 成本字段实配（`input`/`output`/`cache_read_input`/`cache_creation`，多 deployment 取 max 上界，缺失保持 0）——请求前估算与 `x-litellm-response-cost` 实付口径互补
+- `reasoning` 四级回落推断：网关 `supports_reasoning` 声明层三态 → `reasoning_effort_levels`（档位存在即推理）→ `supported_openai_params` 含 `reasoning_effort`/`thinking` → 名字前缀正则 `REASONING_MODEL_PATTERN` 兜底（覆盖稀疏模型）
+- 思考档位自动推导（v0.10.0 起）：网关 `model_info` 的 `reasoning_effort_levels`（完整档集，同名多 deployment 取交集）或 `supports_{xhigh,max}_reasoning_effort` 布尔可精确声明档位——有档位时生成 edge 声明（xhigh/max 直传 effort，minimal~high 走 pi 默认拼写），且 levels 不含 `none` 档（后端强制思考，发 `disabled` 会 4xx）时声明 `off:null`（菜单移除 off、不发送 disabled、显式 off 请求 clamp 到最低档）；无档位声明维持 `{ max: "max" }` 兜底（v0.8.0 行为）。`forceAdaptiveThinking` 对全部推理模型保留（effort 传递通道：budget 路径无法表达档位枚举）。实测 glm-5.2 max 比 high 多约 70% 思考量。LiteLLM 网关当前未配档位字段（2026-09-27 探针：66 个 deployment 全空），行为与 v0.9.1 一致；网关侧配置后即刻生效，无需发版
 - 未登录或拉取失败时回退 持久化目录 ?? fallback 列表
 
 ## 验证行为说明
@@ -221,8 +227,8 @@ Device Flow 设备码展示按运行时传入的回调能力**三级探测**，�
 ## 已知限制
 
 - Keycloak access token 默认 5 分钟有效期，刷新完全依赖 Pi 的 5 分钟缓冲窗口；offline refresh token 失效后 Pi 提示重新 `/login`
-- `reasoning` 三级优先推断（网关 `supports_reasoning` → `supported_openai_params` → 名字正则），稀疏模型仍靠名字正则，非 thinking 模型若被误判可调整 models.ts 的 `REASONING_MODEL_PATTERN` 或查网关 `supports_reasoning`/`supported_openai_params` 配置
-- `max` 思考级别：`forceAdaptiveThinking` 对 deepseek-v4-flash / glm-5.3 / zai/glm-4.7 等后端未实测（限流/权限），最坏情况后端不思考但不报错；xhigh 不可选（litellm 后端不支持）。若某后端拒绝 adaptive thinking 格式，该模型 thinking 请求会报错，可在 models.ts 的 `ADAPTIVE_THINKING` 按模型名豁免
+- `reasoning` 四级回落推断（声明层三态 → `reasoning_effort_levels` → `supported_openai_params` → 名字正则），稀疏模型仍靠名字正则，非 thinking 模型若被误判可调整 models.ts 的 `REASONING_MODEL_PATTERN` 或查网关 `supports_reasoning`/`supported_openai_params` 配置
+- 思考档位：档位推导依赖网关 `model_info` 配置 `reasoning_effort_levels`（LiteLLM 当前未配，走 `{max:"max"}` 兜底）；`forceAdaptiveThinking` 对 deepseek-v4-flash / glm-5.3 / zai/glm-4.7 等后端未实测（限流/权限），最坏情况后端不思考但不报错；xhigh 不可选（litellm 后端不支持，网关未声明 `supports_xhigh_reasoning_effort`）。若某后端拒绝 adaptive thinking 格式，该模型 thinking 请求会报错，可在 models.ts 的 `ADAPTIVE_THINKING` 按模型名豁免
 - LiteLLM 网关需暴露 Anthropic 协议端点（`/v1/messages`）且 JWT claims 含 `preferred_username`/`email`（`litellm_jwtauth` 字段映射）
 - **omp 限制**：`before_provider_headers` 钩子在 omp 中不触发（omp 无此事件），session/customer header 注入仅 pi 生效；成本跟踪不受此限（用 omp 也有的两个 hook，pi/omp 均生效，已端到端探针确认）。omp 上成本显示为 $0.00 是 LiteLLM 网关侧行为：对 coding-agent CLI 请求路由到免费别名后端（如 `claude-sonnet-5`→`glm-5.3`@智谱），网关上报成本为 0；非零展示需部署侧返回非零成本
 
