@@ -15,6 +15,11 @@ interface LiteLLMDeploymentEntry {
     supports_reasoning?: boolean | null;
     /** 网关声明的 OpenAI 参数白名单；含 reasoning_effort / thinking 即可推理（研究 04 bonus）。 */
     supported_openai_params?: string[] | null;
+    /** per-token 成本（DB 实配；缺失保持 0——网关实测存在部分配置的 deployment） */
+    input_cost_per_token?: number | null;
+    output_cost_per_token?: number | null;
+    cache_read_input_token_cost?: number | null;
+    cache_creation_input_token_cost?: number | null;
   };
 }
 
@@ -117,38 +122,70 @@ export function fallbackModels(): ProviderModelConfig[] {
  * 空 data 或全被过滤时返回 null（触发上层回落 stored / fallback）。
  */
 export function transformModelInfo(data: LiteLLMDeploymentEntry[] | undefined): ProviderModelConfig[] | null {
-  const merged = new Map<string, { maxInput?: number; maxOutput?: number; vision: boolean; reasoningDeclared?: boolean; reasoningParam: boolean }>();
+  const merged = new Map<
+    string,
+    {
+      maxInput?: number;
+      maxOutput?: number;
+      vision: boolean;
+      sawReasoningTrue: boolean;
+      sawReasoningFalse: boolean;
+      sawReasoningUndeclared: boolean;
+      reasoningParam: boolean;
+      cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+    }
+  >();
   for (const entry of data ?? []) {
     const name = entry.model_name;
     if (!name || HIDDEN_NAME_PATTERN.test(name)) continue;
     const info = entry.model_info ?? {};
     if (info.mode && NON_CHAT_MODES.has(info.mode)) continue;
 
-    const agg = merged.get(name) ?? { vision: false, reasoningParam: false };
+    const agg = merged.get(name) ?? {
+      vision: true,
+      sawReasoningTrue: false,
+      sawReasoningFalse: false,
+      sawReasoningUndeclared: false,
+      reasoningParam: false,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    };
     agg.maxInput ??= info.max_input_tokens ?? undefined;
     agg.maxOutput ??= info.max_output_tokens ?? undefined;
-    agg.vision ||= info.supports_vision === true;
-    // supports_reasoning 聚合：任一 deployment 声明 true 即 true（与 vision 同语义）；
-    // 全部显式 false 才 false；未声明（null/缺失）保持 undefined，留给 params / 正则回落
-    if (info.supports_reasoning === true) agg.reasoningDeclared = true;
-    else if (info.supports_reasoning === false && agg.reasoningDeclared == null) agg.reasoningDeclared = false;
+    // vision 聚合 all-true（C 项）：LiteLLM 同名组轮询，任一 deployment 非"显式 true"
+    // （含未声明）即不宣传——轮到不支持的后端发图会 500
+    agg.vision = agg.vision && info.supports_vision === true;
+    // 成本按字段取 max：同名多 deployment 轮询时请求可能落到任一后端，取保守上界
+    agg.cost.input = Math.max(agg.cost.input, info.input_cost_per_token ?? 0);
+    agg.cost.output = Math.max(agg.cost.output, info.output_cost_per_token ?? 0);
+    agg.cost.cacheRead = Math.max(agg.cost.cacheRead, info.cache_read_input_token_cost ?? 0);
+    agg.cost.cacheWrite = Math.max(agg.cost.cacheWrite, info.cache_creation_input_token_cost ?? 0);
+    // supports_reasoning 聚合三态（C 项）：任一 deployment 显式 false 一票否决；
+    // 全部显式 true 才 true；其余（未声明混合 / 全未声明）为不确定 → 回落 params / 正则
+    if (info.supports_reasoning === true) agg.sawReasoningTrue = true;
+    else if (info.supports_reasoning === false) agg.sawReasoningFalse = true;
+    else agg.sawReasoningUndeclared = true;
     // supported_openai_params 聚合：任一 deployment 含推理参数即 true（能力信号，any-true）
     agg.reasoningParam ||= hasReasoningParam(info.supported_openai_params);
     merged.set(name, agg);
   }
 
   const models = [...merged].map<ProviderModelConfig>(([id, agg]) => {
-    // 未声明 supports_vision 的按纯文本处理：向非多模态后端发图会 500
+    // vision all-true 才宣传多模态（见聚合处注释）
     const input: ("text" | "image")[] = ["text"];
     if (agg.vision) input.push("image");
     // 推理能力优先级：网关 supports_reasoning 声明 > supported_openai_params 推理参数 > 名字正则
-    const reasoning = agg.reasoningDeclared ?? (agg.reasoningParam || REASONING_MODEL_PATTERN.test(id));
+    const reasoningDeclared = agg.sawReasoningFalse
+      ? false
+      : agg.sawReasoningTrue && !agg.sawReasoningUndeclared
+        ? true
+        : undefined;
+    const reasoning = reasoningDeclared ?? (agg.reasoningParam || REASONING_MODEL_PATTERN.test(id));
     return {
       id,
       name: id,
       reasoning,
       input,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      cost: agg.cost,
       contextWindow: agg.maxInput ?? 200000,
       maxTokens: agg.maxOutput ?? 64000,
       // 推理模型声明 max 思考级别并走 anthropic adaptive thinking 腿（见
