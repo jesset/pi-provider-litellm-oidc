@@ -7,6 +7,25 @@
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-27
+
+吸收自 downstream fork（v0.11.0/v0.12.0 的三项演进，代码逻辑原样吸收，组织特定部署设定不吸收；该 fork 为本仓库 v0.9.1 的快照分支，git 历史独立故手工搬运）。
+
+### 新增
+
+- **refresh 瞬态失败 backoff**（吸收 312efab，演进自 balcsida v3.1.0）：Keycloak 瞬断/限流时，pi credential lock 后排队的刷新调用会形成惊群（每次都再打一次 token endpoint）。`refreshAccessToken` 按 refresh token keyed 记 5s backoff 窗口，窗口内直接返回未过期的旧 credentials；仅 transient（fetch/JSON 解析层异常）记录 backoff，OAuth 语义错误（`invalid_grant` 等 4xx）照抛强制重新 `/login`，旧 token 已过期时不 backoff（立即重试）。签名改为收整个 credentials
+- **网关/Keycloak URL HTTPS 强制**（吸收 312efab）：`assertSecureUrl` 在模块加载时 fail-fast 校验 `LITELLM_OIDC_GATEWAY_URL` / `LITELLM_OIDC_KEYCLOAK_URL` 必须为 https——误配 http 会明文发送 JWT 与 refresh token；loopback 主机（localhost/127.x/[::1]）例外供本地调试
+- **`model.cost` 从 `/model/info` 实配**（吸收 da59d55）：读取 4 个 per-token 成本字段（input/output/cache_read_input/cache_creation），同名多 deployment 按字段取 max 保守上界，缺失保持 0——请求前估算与 `x-litellm-response-cost` 实付口径互补。LiteLLM 探针（2026-09-27）：58/66 deployment 有值，吸收即刻生效
+- **思考档位自动推导**（吸收 1658746 + fffdaa3）：`reasoning_effort_levels`（网关完整档集，同名多 deployment 取交集）为回落链第一级，`supports_{xhigh,max}_reasoning_effort` per-level 布尔拼装为第二级，原三级链（`supports_reasoning` 声明层三态 > `supported_openai_params` > 名字正则）后移成四级。thinkingLevelMap 来源分化：有精确档位从 levels 生成 edge 声明（xhigh/max 值=effort 直传，minimal~high 走 pi 默认拼写），且 levels 不含 `none` 档（后端强制思考，发 disabled 会 4xx）时有据声明 `off:null`（菜单移除 off、不发送 disabled、显式 off 请求 clamp 到最低档）——v0.8.0 的 off-null 黑洞陷阱仅在无据盲目补全时成立；无档位声明维持 `{max:"max"}` hack 兜底。`forceAdaptiveThinking` 对全部推理模型保留（effort 传递通道）。LiteLLM 探针（2026-09-27 二次）：52/66 deployment 已配 `reasoning_effort_levels: ['low','high','max']`（无 none 档），档位推导即时激活——12 个模型（glm-5.3 系 / k3 系 / claude 系）thinkingLevelMap 变为 `{max:"max", off:null}`（off 从菜单移除，网关声明强制思考），4 个未声明档位模型维持 `{max}` 兜底；dry-run 验证 reasoning/vision 判定零变化
+
+### 变更
+
+- **能力聚合 any→all**（吸收 da59d55）：`supports_vision` 需全部同名 deployment 显式 true 才宣传（LiteLLM 同名组轮询，任一后端不支持发图会 500，未声明当不支持）；`supports_reasoning` 三态聚合（任一显式 false 一票否决、全部显式 true 才直出、未声明混合回落兜底）——修复此前"先见 false 后见 true 被锁死 false"的聚合边界。LiteLLM 现网无混合声明同名组，判定零变化（dry-run 验证）
+
+### 测试
+
+- `bun test` 87 个用例（+34）：新增 test/config.test.ts（HTTPS 校验）、test/refresh-backoff.test.ts（backoff 全边界），models.test.ts 扩展 all-true 聚合与档位推导用例
+
 ## [0.9.1] - 2026-09-19
 
 ### 修复

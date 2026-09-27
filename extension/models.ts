@@ -15,6 +15,18 @@ interface LiteLLMDeploymentEntry {
     supports_reasoning?: boolean | null;
     /** 网关声明的 OpenAI 参数白名单；含 reasoning_effort / thinking 即可推理（研究 04 bonus）。 */
     supported_openai_params?: string[] | null;
+    /** per-token 成本（DB 实配；缺失保持 0——网关实测存在部分配置的 deployment） */
+    input_cost_per_token?: number | null;
+    output_cost_per_token?: number | null;
+    cache_read_input_token_cost?: number | null;
+    cache_creation_input_token_cost?: number | null;
+    /** 网关声明的完整档位集（v0.12.0 回落链第一级） */
+    reasoning_effort_levels?: string[] | null;
+    /** per-level 布尔（回落链第二级）：LiteLLM 仅对非默认档暴露布尔
+     *  （none/minimal/low/xhigh/max；medium/high 是默认档无布尔），其中只有
+     *  xhigh/max 影响 thinkingLevelMap 产物，none 是 off 档（红线恒省略）不读 */
+    supports_xhigh_reasoning_effort?: boolean | null;
+    supports_max_reasoning_effort?: boolean | null;
   };
 }
 
@@ -59,6 +71,32 @@ const ADAPTIVE_THINKING: Pick<ProviderModelConfig, "thinkingLevelMap" | "compat"
 function hasReasoningParam(params: string[] | null | undefined): boolean {
   return Array.isArray(params) && params.some((p) => REASONING_PARAM_NAMES.has(p));
 }
+
+/**
+ * 从 deployment 的 model_info 解析档位集（v0.12.0 回落链的档位数据级）：
+ * `reasoning_effort_levels`（完整档集，优先）> per-level 布尔拼装（xhigh/max 布尔
+ * 叠加在 pi 默认档 minimal~high 之上）。均缺失返回 null（落能力声明链）。
+ * `none` 是档位集合法成员——参与交集与 off 判定（levels 含 none = 后端支持关思考）；
+ * 但不作为 pi 思考级别枚举输出（off 由 thinkingLevelMap.off 单独表达）。
+ */
+function resolveEffortLevels(
+  info: NonNullable<Pick<LiteLLMDeploymentEntry, "model_info">["model_info"]>,
+): string[] | null {
+  const levels = info.reasoning_effort_levels;
+  if (Array.isArray(levels) && levels.length > 0) return levels;
+  const xhigh = info.supports_xhigh_reasoning_effort === true;
+  const max = info.supports_max_reasoning_effort === true;
+  if (xhigh || max) {
+    const set = ["minimal", "low", "medium", "high"];
+    if (xhigh) set.push("xhigh");
+    if (max) set.push("max");
+    return set;
+  }
+  return null;
+}
+
+/** pi 思考级别菜单中需要 thinkingLevelMap 显式声明的 edge 档（其余默认可选）。 */
+const EDGE_THINKING_LEVELS = new Set(["xhigh", "max"]);
 
 /**
  * /model/info 显式声明的非 chat 模式，直接排除。
@@ -117,43 +155,120 @@ export function fallbackModels(): ProviderModelConfig[] {
  * 空 data 或全被过滤时返回 null（触发上层回落 stored / fallback）。
  */
 export function transformModelInfo(data: LiteLLMDeploymentEntry[] | undefined): ProviderModelConfig[] | null {
-  const merged = new Map<string, { maxInput?: number; maxOutput?: number; vision: boolean; reasoningDeclared?: boolean; reasoningParam: boolean }>();
+  const merged = new Map<
+    string,
+    {
+      maxInput?: number;
+      maxOutput?: number;
+      vision: boolean;
+      sawReasoningTrue: boolean;
+      sawReasoningFalse: boolean;
+      sawReasoningUndeclared: boolean;
+      reasoningParam: boolean;
+      effortLevels: string[] | null;
+      cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+    }
+  >();
   for (const entry of data ?? []) {
     const name = entry.model_name;
     if (!name || HIDDEN_NAME_PATTERN.test(name)) continue;
     const info = entry.model_info ?? {};
     if (info.mode && NON_CHAT_MODES.has(info.mode)) continue;
 
-    const agg = merged.get(name) ?? { vision: false, reasoningParam: false };
+    const agg = merged.get(name) ?? {
+      vision: true,
+      sawReasoningTrue: false,
+      sawReasoningFalse: false,
+      sawReasoningUndeclared: false,
+      reasoningParam: false,
+      effortLevels: null,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    };
     agg.maxInput ??= info.max_input_tokens ?? undefined;
     agg.maxOutput ??= info.max_output_tokens ?? undefined;
-    agg.vision ||= info.supports_vision === true;
-    // supports_reasoning 聚合：任一 deployment 声明 true 即 true（与 vision 同语义）；
-    // 全部显式 false 才 false；未声明（null/缺失）保持 undefined，留给 params / 正则回落
-    if (info.supports_reasoning === true) agg.reasoningDeclared = true;
-    else if (info.supports_reasoning === false && agg.reasoningDeclared == null) agg.reasoningDeclared = false;
+    // vision 聚合 all-true（C 项）：LiteLLM 同名组轮询，任一 deployment 非"显式 true"
+    // （含未声明）即不宣传——轮到不支持的后端发图会 500
+    agg.vision = agg.vision && info.supports_vision === true;
+    // 成本按字段取 max：同名多 deployment 轮询时请求可能落到任一后端，取保守上界
+    agg.cost.input = Math.max(agg.cost.input, info.input_cost_per_token ?? 0);
+    agg.cost.output = Math.max(agg.cost.output, info.output_cost_per_token ?? 0);
+    agg.cost.cacheRead = Math.max(agg.cost.cacheRead, info.cache_read_input_token_cost ?? 0);
+    agg.cost.cacheWrite = Math.max(agg.cost.cacheWrite, info.cache_creation_input_token_cost ?? 0);
+    // supports_reasoning 聚合三态（C 项）：任一 deployment 显式 false 一票否决；
+    // 全部显式 true 才 true；其余（未声明混合 / 全未声明）为不确定 → 回落 params / 正则
+    if (info.supports_reasoning === true) agg.sawReasoningTrue = true;
+    else if (info.supports_reasoning === false) agg.sawReasoningFalse = true;
+    else agg.sawReasoningUndeclared = true;
     // supported_openai_params 聚合：任一 deployment 含推理参数即 true（能力信号，any-true）
     agg.reasoningParam ||= hasReasoningParam(info.supported_openai_params);
+    // 档位集聚合取交集（all-true 精神：只宣传轮询组全部 deployment 都支持的档位；
+    // 某个 deployment 无任何档位声明 = 空集 → 交集为空，落三级链）
+    const curLevels = resolveEffortLevels(info);
+    agg.effortLevels =
+      agg.effortLevels === null
+        ? curLevels
+        : curLevels === null
+          ? []
+          : agg.effortLevels.filter((l) => curLevels.includes(l));
     merged.set(name, agg);
   }
 
   const models = [...merged].map<ProviderModelConfig>(([id, agg]) => {
-    // 未声明 supports_vision 的按纯文本处理：向非多模态后端发图会 500
+    // vision all-true 才宣传多模态（见聚合处注释）
     const input: ("text" | "image")[] = ["text"];
     if (agg.vision) input.push("image");
-    // 推理能力优先级：网关 supports_reasoning 声明 > supported_openai_params 推理参数 > 名字正则
-    const reasoning = agg.reasoningDeclared ?? (agg.reasoningParam || REASONING_MODEL_PATTERN.test(id));
+    // 推理能力四级回落链（v0.12.0，ADR 0001）：supports_reasoning 声明层三态 >
+    // reasoning_effort_levels（档位存在即推理）> supported_openai_params > 名字正则
+    const reasoningDeclared = agg.sawReasoningFalse
+      ? false
+      : agg.sawReasoningTrue && !agg.sawReasoningUndeclared
+        ? true
+        : undefined;
+    const reasoning = reasoningDeclared
+      ?? ((agg.effortLevels?.length ?? 0) > 0 || agg.reasoningParam || REASONING_MODEL_PATTERN.test(id));
+    // thinkingLevelMap 来源分化（v0.12.0）：有精确档位时从 levels 生成 edge 声明
+    // （xhigh/max，值=effort 直传；minimal~high 省略走 pi 默认拼写）；off 按据声明
+    // （levels 无 none → off:null，见下方注释；无据时省略）。无档位声明维持 hack
+    // 兜底 {max}。forceAdaptiveThinking 对所有推理模型保留——它是 effort 传递的
+    // wire 通道（effort 值与档位枚举同构，budget 路径无法表达档位枚举；
+    // downstream fork 2026-09-20 anthropic 端点实测 adaptive 形态被接受且 effort 语义生效）。
+    let thinking: Pick<ProviderModelConfig, "thinkingLevelMap" | "compat"> | undefined;
+    if (reasoning) {
+      const levels = agg.effortLevels;
+      let map: Record<string, string | null> | undefined;
+      if (levels === null) {
+        map = { max: "max" }; // 无档位声明 → hack 兜底（off 省略，维持现状）
+      } else {
+        const entries: [string, string | null][] = levels
+          .filter((l) => EDGE_THINKING_LEVELS.has(l))
+          .map((l) => [l, l]);
+        // 后端不支持关思考（levels 无 none 档，如 glm-5.3 / kimi-k3 官方三档）声明
+        // off:null——菜单层移除 off（pi getSupportedThinkingLevels 的 mapped===null
+        // 排除）+ 序列化层不再发 thinking:{type:"disabled"}（对强制思考后端会 4xx）、
+        // 显式 off 请求被 clamp 到最低档。v0.8.0 的 off:null "黑洞"陷阱只在**无依据
+        // 盲目补全**时成立；网关 levels 无 none 正是依据。levels 含 none 时 off 省略
+        // （后端支持关思考，默认可选）。
+        if (!levels.includes("none")) entries.push(["off", null] as const);
+        map = entries.length > 0 ? Object.fromEntries(entries) : undefined;
+      }
+      // pi 的 thinkingLevelMap 类型声明为 Record<string,string>，但运行时序列化器
+      // 明确检查 `?.off !== null`（v0.8.0 取证）——null 是其支持的运行时形状，
+      // 上游类型声明不完整，此处断言越过
+      thinking = {
+        ...(map ? { thinkingLevelMap: map as unknown as ProviderModelConfig["thinkingLevelMap"] } : {}),
+        compat: ADAPTIVE_THINKING.compat,
+      };
+    }
     return {
       id,
       name: id,
       reasoning,
       input,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      cost: agg.cost,
       contextWindow: agg.maxInput ?? 200000,
       maxTokens: agg.maxOutput ?? 64000,
-      // 推理模型声明 max 思考级别并走 anthropic adaptive thinking 腿（见
-      // ADAPTIVE_THINKING）；非推理模型不加（thinkingLevelMap 缺失时 pi 仅允许 off）。
-      ...(reasoning ? ADAPTIVE_THINKING : {}),
+      // 非推理模型不加 thinkingLevelMap/compat（thinkingLevelMap 缺失时 pi 仅允许 off）
+      ...(thinking ?? {}),
     };
   });
 

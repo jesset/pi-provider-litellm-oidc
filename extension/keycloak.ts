@@ -185,20 +185,44 @@ export async function loginDeviceFlow(callbacks: LoginCallbacks): Promise<OAuthC
   throw new Error("Device code expired before verification completed. Run /login again.");
 }
 
+/**
+ * refresh 瞬态失败 backoff（吸收自 balcsida v3.1.0）。Keycloak 瞬断 / 限流时，
+ * pi credential lock 后排队的刷新调用会形成惊群（每次都再打一次 token
+ * endpoint）——5s 窗口内直接返回未过期的旧 credentials 避免惊群。按 refresh
+ * token keyed（一个凭证的失败不拖累另一个）；仅 transient（postForm 的 fetch /
+ * JSON 解析层异常）记录，OAuth 语义错误（OAuthHttpError，如 invalid_grant）照抛
+ * 强制重登；旧 token 已过期时也不 backoff（返回过期凭证无意义，宁可立刻重试）。
+ */
+const TRANSIENT_REFRESH_BACKOFF_MS = 5_000;
+/** refreshToken → backoff 截止时刻（epoch ms） */
+const transientRefreshBackoffUntil = new Map<string, number>();
+
 /** RFC 6749 refresh_token grant. Keycloak rotates refresh tokens; the new one must be persisted. */
-export async function refreshAccessToken(refreshToken: string, signal: AbortSignal): Promise<OAuthCredentials> {
+export async function refreshAccessToken(credentials: OAuthCredentials, signal: AbortSignal): Promise<OAuthCredentials> {
   signal.throwIfAborted();
-  const tokens = await postForm(
-    keycloak.tokenEndpoint,
-    {
-      grant_type: "refresh_token",
-      client_id: config.keycloakClientId,
-      refresh_token: refreshToken,
-      scope: config.keycloakScope,
-    },
-    signal,
-  );
-  return toCredentials(tokens);
+  const holdUntil = transientRefreshBackoffUntil.get(credentials.refresh);
+  if (holdUntil !== undefined && Date.now() < holdUntil && Date.now() < credentials.expires) {
+    return credentials;
+  }
+  try {
+    const tokens = await postForm(
+      keycloak.tokenEndpoint,
+      {
+        grant_type: "refresh_token",
+        client_id: config.keycloakClientId,
+        refresh_token: credentials.refresh,
+        scope: config.keycloakScope,
+      },
+      signal,
+    );
+    transientRefreshBackoffUntil.delete(credentials.refresh);
+    return toCredentials(tokens);
+  } catch (err) {
+    if (!(err instanceof OAuthHttpError) && Date.now() < credentials.expires) {
+      transientRefreshBackoffUntil.set(credentials.refresh, Date.now() + TRANSIENT_REFRESH_BACKOFF_MS);
+    }
+    throw err;
+  }
 }
 
 /**
