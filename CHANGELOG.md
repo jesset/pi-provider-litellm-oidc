@@ -15,9 +15,16 @@
 - **同名组档位交集为空视同未声明**：回落 `{max}` 兜底。修复 0.10.0 的边界缺陷——档位声明过但交集为空且 reasoning 经名字正则判 true 时会产出 `{off:null}`，菜单只剩 off、连 max 都消失
 - 新增域文档：`CONTEXT.md`（术语表）与 `docs/adr/0001`（本决策），同时补上 CLAUDE.md 对二者的既有引用
 
+### 修复（代码审查后续）
+
+- **布尔拼装级读 `supports_none_reasoning_effort`**（opt-in：`true` 才含 none）：此前布尔级产出的档集恒不含 none，落到对齐逻辑后 off 恒为 null——部署仅配布尔且 `supports_none=true` 时 off 被误排除。不照搬 LiteLLM 对 none 的 opt-out 默认含：对强制思考后端错误宣称支持关思考会 4xx，宁缺勿滥；levels 声明才是 wins whole 的权威
+- **levels 全为未知档名时视同未声明**：fall-through 到布尔拼装级，不再提前返回跳过回落链第二级
+- 七档知识收敛为单一 `THINKING_LEVEL_TABLE` 对照表（pi↔gateway↔edge），`KNOWN_EFFORT_LEVELS` / `DEFAULT_THINKING_LEVELS` / `EDGE_THINKING_LEVELS` 全部从表派生
+- 注释修正：interface 布尔注释按 v0.10.1 语义改写（不再"none 不读"）、ADAPTIVE_THINKING 的 off 红线表述精化为"兜底路径省略，有据声明见 ADR 0001"、"hack 兜底"统一为术语表规范词"档位兜底"
+
 ### 测试
 
-- `bun test` 90 个用例（+3）：minimal 直传与档集不含 low 不外溢、未知档忽略/全未知回落兜底、交集为空回落兜底；改写 6 个档位用例为精确对齐断言
+- `bun test` 92 个用例（+5）：minimal 直传与档集不含 low 不外溢、未知档忽略/全未知回落兜底、交集为空回落兜底、布尔级读 none（off:"off"）、全未知 fall-through；改写 6 个档位用例为精确对齐断言
 - 真实数据 dry-run（66 deployment）：glm/k3/claude 系 12 模型菜单 `[low,high,max]`，deepseek-flash `[off,low,high,max]`，档集内档 effort 全部直传自身值
 
 ## [0.10.0] - 2026-09-27

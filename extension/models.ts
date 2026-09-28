@@ -22,9 +22,11 @@ interface LiteLLMDeploymentEntry {
     cache_creation_input_token_cost?: number | null;
     /** 网关声明的完整档位集（v0.10.0 回落链第一级） */
     reasoning_effort_levels?: string[] | null;
-    /** per-level 布尔（回落链第二级）：LiteLLM 仅对非默认档暴露布尔
-     *  （none/minimal/low/xhigh/max；medium/high 是默认档无布尔），其中只有
-     *  xhigh/max 影响 thinkingLevelMap 产物，none 是 off 档（红线恒省略）不读 */
+    /** per-level 布尔（回落链第二级）：LiteLLM 仅对 none/minimal/low/xhigh/max
+     *  暴露布尔（medium/high 是默认档无布尔）。此处 opt-in 读取三个解锁性布尔
+     *  （none→off 可选、xhigh/max→edge 档可选）；minimal/low 的 opt-out false
+     *  排除精度留给 levels 声明，拼装级不读 */
+    supports_none_reasoning_effort?: boolean | null;
     supports_xhigh_reasoning_effort?: boolean | null;
     supports_max_reasoning_effort?: boolean | null;
   };
@@ -42,13 +44,14 @@ const REASONING_PARAM_NAMES = new Set(["reasoning_effort", "thinking"]);
  * - thinkingLevelMap 只列 max：off/minimal/low/medium/high 在 pi 的
  *   getSupportedThinkingLevels 里默认可选（非 xhigh/max 级别默认返回 true），
  *   xhigh 不声明（litellm 后端均不支持，pi-ai 内置 zai/kimi catalog 亦无 xhigh）。
- * - ⚠️ off 必须保持省略，切勿“补全”为 off: null：pi 序列化器依赖
- *   thinkingLevelMap?.off !== null 才发送 thinking:{type:"disabled"}——若声明
- *   off: null，disabled 通道静默关闭，所有依赖显式关思考的调用方全部遭殃
- *   （pi 会话级 off、auto-mode 扩展的分类器 thinkingEnabled:false、CC 式
- *   小预算分类调用）。实测：2026-08-26 thinking:{type:"disabled"} 经本网关
- *   送达 GLM 后端并降为 effort low 轻思考（取证见 相关研究笔记
- *   thinking-param-blackhole）。
+ * - ⚠️ 兜底路径的 off 保持省略（本常量不声明 off 键）：未声明档位时后端的
+ *   关思考能力未知，走 pi 默认（off 可选、发 thinking:{type:"disabled"}）最
+ *   保守。有档位声明后 off 按档集处置（含 none → off:"off"，不含 → off:null
+ *   不发 disabled，见 transformModelInfo 与 ADR 0001）——pi 序列化器依赖
+ *   thinkingLevelMap?.off !== null 才发 disabled，v0.8.0 取证的 off:null
+ *   "黑洞"陷阱仅在无据盲目补全时成立（相关研究笔记
+ *   thinking-param-blackhole；实测 disabled 经本网关送达 GLM 后端
+ *   降为 effort low 轻思考）。
  * - minimal/low/medium/high 省略 = 走 pi 通用 switch（minimal/low→low、
  *   medium→medium、high→high）作为 output_config.effort 发送：对真 Claude
  *   后端（low/medium/high 均为原生档位）现状即正确；GLM 后端实际仅
@@ -73,19 +76,42 @@ function hasReasoningParam(params: string[] | null | undefined): boolean {
 }
 
 /**
- * LiteLLM `REASONING_EFFORT` 档位全集（types/llms/openai.py）。与 pi 思考级别七档
- * 一一对应，唯一命名差异是网关 `none` ↔ pi `off`。档位集之外的未知档名忽略——
+ * pi 思考级别七档 ↔ 网关档位（LiteLLM `REASONING_EFFORT`，types/llms/openai.py）
+ * 的对照表，唯一命名差异是网关 `none` ↔ pi `off`。档位解析与菜单精确对齐
+ * （v0.10.1，ADR 0001）的全部档位视图从此派生；档位集之外的未知档名忽略——
  * LiteLLM 对未知 level 同样丢弃而非报错（router_utils/reasoning_effort_capability.py）。
  */
-const KNOWN_EFFORT_LEVELS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const THINKING_LEVEL_TABLE: ReadonlyArray<{
+  /** pi 菜单档名 */
+  pi: string;
+  /** 网关 `reasoning_effort_levels` 档名 */
+  gateway: string;
+  /** edge=true：pi 要求 thinkingLevelMap 显式声明才可选（xhigh/max），其余默认可选 */
+  edge: boolean;
+}> = [
+  { pi: "off", gateway: "none", edge: false },
+  { pi: "minimal", gateway: "minimal", edge: false },
+  { pi: "low", gateway: "low", edge: false },
+  { pi: "medium", gateway: "medium", edge: false },
+  { pi: "high", gateway: "high", edge: false },
+  { pi: "xhigh", gateway: "xhigh", edge: true },
+  { pi: "max", gateway: "max", edge: true },
+];
+
+/** 网关档位全集（未知档名过滤依据）。 */
+const KNOWN_EFFORT_LEVELS = new Set(THINKING_LEVEL_TABLE.map((e) => e.gateway));
+
+/** pi 默认可选（非 edge）的思考级别。精确对齐时按 pi↔gateway 名声明自身值或 null 排除。 */
+const DEFAULT_THINKING_LEVELS = THINKING_LEVEL_TABLE.filter((e) => !e.edge);
+
+/** pi 要求 thinkingLevelMap 显式声明才可选的 edge 思考级别。 */
+const EDGE_THINKING_LEVELS = THINKING_LEVEL_TABLE.filter((e) => e.edge);
 
 /**
  * 从 deployment 的 model_info 解析档位集（v0.10.0 回落链的档位数据级）：
- * `reasoning_effort_levels`（完整档集，优先）> per-level 布尔拼装（xhigh/max 布尔
- * 叠加在 pi 默认档 minimal~high 之上）。均缺失（或过滤未知档后为空）返回 null
- * （落能力声明链）。`none` 是档位集合法成员——参与交集与 off 判定（levels 含
- * none = 后端支持关思考）；但不作为 pi 思考级别枚举输出（off 由 thinkingLevelMap
- * 的 off 键单独表达）。
+ * `reasoning_effort_levels`（完整档集，优先）> per-level 布尔拼装。均缺失（或
+ * levels 过滤未知档后为空）返回 null（落能力声明链）。`none` 是档位集合法
+ * 成员——参与交集与 off 判定（levels 含 none = 后端支持关思考）。
  */
 function resolveEffortLevels(
   info: NonNullable<Pick<LiteLLMDeploymentEntry, "model_info">["model_info"]>,
@@ -93,34 +119,26 @@ function resolveEffortLevels(
   const levels = info.reasoning_effort_levels;
   if (Array.isArray(levels) && levels.length > 0) {
     const known = levels.filter((l) => KNOWN_EFFORT_LEVELS.has(l));
-    return known.length > 0 ? known : null;
+    if (known.length > 0) return known;
+    // 全为未知档名 → 视同未声明，继续走布尔拼装级（"未知档名忽略"）
   }
+  // 布尔拼装级（levels 缺失时的近似）：minimal~high 恒含（LiteLLM：medium/high
+  // 无条件、minimal/low 为 opt-out 默认含——false 排除的精度留给 levels 声明）；
+  // none/xhigh/max 三个解锁性布尔 opt-in 读取（=== true 才含。none 不照搬
+  // LiteLLM 的 opt-out 默认含：对强制思考后端错误宣称支持关思考会 4xx，宁缺
+  // 勿滥）。levels 才是 wins whole 的权威声明（ADR 0001）。
+  const none = info.supports_none_reasoning_effort === true;
   const xhigh = info.supports_xhigh_reasoning_effort === true;
   const max = info.supports_max_reasoning_effort === true;
-  if (xhigh || max) {
-    const set = ["minimal", "low", "medium", "high"];
+  if (none || xhigh || max) {
+    const set = DEFAULT_THINKING_LEVELS.filter((e) => e.gateway !== "none").map((e) => e.gateway);
+    if (none) set.unshift("none");
     if (xhigh) set.push("xhigh");
     if (max) set.push("max");
     return set;
   }
   return null;
 }
-
-/** pi 思考级别菜单中需要 thinkingLevelMap 显式声明的 edge 档（其余默认可选）。 */
-const EDGE_THINKING_LEVELS = new Set(["xhigh", "max"]);
-
-/**
- * pi 默认可选（非 edge）的思考档。菜单精确对齐（v0.10.1，ADR 0001）时，网关档集
- * 含对应档则声明为自身值（选什么发什么 effort），不含则以 null 显式排除。
- * `gateway` 是该档在网关 `reasoning_effort_levels` 里的名字（off ↔ none）。
- */
-const DEFAULT_THINKING_LEVELS: ReadonlyArray<{ pi: string; gateway: string }> = [
-  { pi: "off", gateway: "none" },
-  { pi: "minimal", gateway: "minimal" },
-  { pi: "low", gateway: "low" },
-  { pi: "medium", gateway: "medium" },
-  { pi: "high", gateway: "high" },
-];
 
 /**
  * /model/info 显式声明的非 chat 模式，直接排除。
@@ -250,7 +268,7 @@ export function transformModelInfo(data: LiteLLMDeploymentEntry[] | undefined): 
         : undefined;
     const reasoning = reasoningDeclared
       ?? ((agg.effortLevels?.length ?? 0) > 0 || agg.reasoningParam || REASONING_MODEL_PATTERN.test(id));
-    // thinkingLevelMap 来源分化（v0.10.0）：无档位声明维持 hack 兜底 {max}；有精确
+    // thinkingLevelMap 来源分化（v0.10.0）：无档位声明维持档位兜底 {max}；有精确
     // 档位时菜单精确对齐（v0.10.1，ADR 0001）——map 是网关档集的镜像：
     // - 档集内的档声明为自身值：选什么发什么 effort（minimal 直传，不再走 pi 序列化
     //   switch 的 minimal→low claude 族近似——那是无声明场景的兜底）；off 走
@@ -274,13 +292,13 @@ export function transformModelInfo(data: LiteLLMDeploymentEntry[] | undefined): 
       const levels = agg.effortLevels;
       let map: Record<string, string | null>;
       if (!levels || levels.length === 0) {
-        map = { max: "max" }; // 无档位声明（或同名组交集为空）→ hack 兜底（off 省略，维持现状）
+        map = { max: "max" }; // 无档位声明（或同名组交集为空）→ 档位兜底（off 省略，维持现状）
       } else {
         const entries: [string, string | null][] = DEFAULT_THINKING_LEVELS.map(({ pi, gateway }) =>
           levels.includes(gateway) ? [pi, pi] : [pi, null],
         );
-        for (const edge of EDGE_THINKING_LEVELS) {
-          if (levels.includes(edge)) entries.push([edge, edge]);
+        for (const { pi } of EDGE_THINKING_LEVELS) {
+          if (levels.includes(pi)) entries.push([pi, pi]);
         }
         map = Object.fromEntries(entries);
       }

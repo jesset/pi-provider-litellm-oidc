@@ -431,7 +431,35 @@ describe("transformModelInfo — reasoning_effort_levels 档位推导", () => {
     });
   });
 
-  it("per-level 布尔全缺 → 落回现三级链（名字正则模型维持 hack 兜底 {max}）", () => {
+  it("布尔拼装级读 supports_none_reasoning_effort（opt-in）：true → 档集含 none → off:\"off\" 可选（修复：此前布尔级恒不含 none，off 恒被排除）", () => {
+    const models = transformModelInfo([
+      { model_name: "m", model_info: { supports_none_reasoning_effort: true, supports_max_reasoning_effort: true } },
+    ]);
+    expect(byId(models)["m"].thinkingLevelMap).toEqual({
+      off: "off",
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      max: "max",
+    });
+  });
+
+  it("levels 全为未知档名时不提前返回：视同未声明，fall-through 到布尔拼装级", () => {
+    const models = transformModelInfo([
+      { model_name: "glm-x", model_info: { reasoning_effort_levels: ["turbo"], supports_max_reasoning_effort: true } },
+    ]);
+    expect(byId(models)["glm-x"].thinkingLevelMap).toEqual({
+      off: null,
+      minimal: "minimal",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      max: "max",
+    });
+  });
+
+  it("per-level 布尔全缺 → 落回现三级链（名字正则模型维持档位兜底 {max}）", () => {
     const models = transformModelInfo([
       { model_name: "glm-5.2", model_info: {} },
     ]);
