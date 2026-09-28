@@ -64,6 +64,11 @@ const REASONING_PARAM_NAMES = new Set(["reasoning_effort", "thinking"]);
  *   （679 vs 395 字符）；k3 / kimi-k2.7-code / kimi/k3 / claude-sonnet-5 同样接受
  *   adaptive+max。其余模型为限流/权限无法实测，但网关对 adaptive 格式无拒绝
  *   （最坏情况后端不思考，不报错）。
+ * - LiteLLM anthropic 腿桥接行为（v1.100.1 源码核实，litellm/llms/anthropic/
+ *   experimental_pass_through/adapters/transformation.py，自 downstream fork
+ *   研究吸收）：非 Claude 后端 thinking → reasoning_effort，adaptive 默认
+ *   medium 但 output_config.effort 覆盖（effort=max → reasoning_effort=max）；
+ *   后端 reasoning_content 回译为 anthropic thinking 块（含流式 thinking_delta）。
  */
 const ADAPTIVE_THINKING: Pick<ProviderModelConfig, "thinkingLevelMap" | "compat"> = {
   thinkingLevelMap: { max: "max" },
