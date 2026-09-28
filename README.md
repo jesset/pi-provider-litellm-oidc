@@ -184,7 +184,7 @@ pi
 - 能力聚合 all-true（v0.10.0 起）：LiteLLM 同名组按 deployment 轮询，`supports_vision` 需全部 deployment 显式支持才宣传（未声明当不支持——轮到不支持的后端发图会 500）；`supports_reasoning` 任一显式 false 一票否决、全部显式 true 才直出、未声明混合回落兜底链。`input` 按 vision 判定决定是否含 image
 - `model.cost` 从 `/model/info` 的 4 个 per-token 成本字段实配（`input`/`output`/`cache_read_input`/`cache_creation`，多 deployment 取 max 上界，缺失保持 0）——请求前估算与 `x-litellm-response-cost` 实付口径互补
 - `reasoning` 四级回落推断：网关 `supports_reasoning` 声明层三态 → `reasoning_effort_levels`（档位存在即推理）→ `supported_openai_params` 含 `reasoning_effort`/`thinking` → 名字前缀正则 `REASONING_MODEL_PATTERN` 兜底（覆盖稀疏模型）
-- 思考档位自动推导（v0.10.0 起）：网关 `model_info` 的 `reasoning_effort_levels`（完整档集，同名多 deployment 取交集）或 `supports_{xhigh,max}_reasoning_effort` 布尔可精确声明档位——有档位时生成 edge 声明（xhigh/max 直传 effort，minimal~high 走 pi 默认拼写），且 levels 不含 `none` 档（后端强制思考，发 `disabled` 会 4xx）时声明 `off:null`（菜单移除 off、不发送 disabled、显式 off 请求 clamp 到最低档）；无档位声明维持 `{ max: "max" }` 兜底（v0.8.0 行为）。`forceAdaptiveThinking` 对全部推理模型保留（effort 传递通道：budget 路径无法表达档位枚举）。实测 glm-5.2 max 比 high 多约 70% 思考量。LiteLLM 网关已配档位字段（2026-09-27 探针：52/66 deployment 声明 `['low','high','max']`）：12 个模型（glm-5.3 系 / k3 系 / claude 系）激活 off:null——思考菜单移除 off（网关声明强制思考）；4 个未声明档位的模型维持 `{max}` 兜底
+- 思考档位自动推导 + 菜单精确对齐（v0.10.1 起）：网关 `model_info` 的 `reasoning_effort_levels`（完整档集，同名多 deployment 取交集，未知档名忽略）或 `supports_{xhigh,max}_reasoning_effort` 布尔可精确声明档位——**有档位时菜单与档集精确对齐**：档集内的档直传自身 effort（选什么发什么），档集外的默认档以 `null` 从菜单显式排除，网关 `none` 档即 off（不含则 `off:null`——不发 disabled，对强制思考后端会 4xx，显式 off 请求 clamp 最低档）；**无档位（或同名组交集为空）**维持 `{ max: "max" }` 兜底（v0.8.0 行为，全菜单可选）。`forceAdaptiveThinking` 对全部推理模型保留（effort 传递通道：budget 路径无法表达档位枚举）。实测 glm-5.2 max 比 high 多约 70% 思考量。LiteLLM 网关已配档位字段（2026-09-27 探针）：glm-5.3 系 / k3 系 / claude 系（`['low','high','max']`）菜单为 low/high/max 三档；deepseek-flash（`['none','low','high','max']`）菜单为 off/low/high/max；设计决策见 `docs/adr/0001`
 - 未登录或拉取失败时回退 持久化目录 ?? fallback 列表
 
 ## 验证行为说明
@@ -228,7 +228,7 @@ Device Flow 设备码展示按运行时传入的回调能力**三级探测**，�
 
 - Keycloak access token 默认 5 分钟有效期，刷新完全依赖 Pi 的 5 分钟缓冲窗口；offline refresh token 失效后 Pi 提示重新 `/login`
 - `reasoning` 四级回落推断（声明层三态 → `reasoning_effort_levels` → `supported_openai_params` → 名字正则），稀疏模型仍靠名字正则，非 thinking 模型若被误判可调整 models.ts 的 `REASONING_MODEL_PATTERN` 或查网关 `supports_reasoning`/`supported_openai_params` 配置
-- 思考档位：档位推导依赖网关 `model_info` 配置 `reasoning_effort_levels`（LiteLLM 当前未配，走 `{max:"max"}` 兜底）；`forceAdaptiveThinking` 对 deepseek-v4-flash / glm-5.3 / zai/glm-4.7 等后端未实测（限流/权限），最坏情况后端不思考但不报错；xhigh 不可选（litellm 后端不支持，网关未声明 `supports_xhigh_reasoning_effort`）。若某后端拒绝 adaptive thinking 格式，该模型 thinking 请求会报错，可在 models.ts 的 `ADAPTIVE_THINKING` 按模型名豁免
+- 思考档位：菜单精确对齐依赖网关 `model_info` 配置 `reasoning_effort_levels`（未配的模型走 `{max:"max"}` 兜底全菜单）；网关误配会直接反映到用户菜单（网关声明权威，不在客户端修补）；`forceAdaptiveThinking` 对 deepseek-v4-flash / glm-5.3 / zai/glm-4.7 等后端未实测（限流/权限），最坏情况后端不思考但不报错；xhigh 不可选（litellm 后端不支持，网关未声明）。若某后端拒绝 adaptive thinking 格式，该模型 thinking 请求会报错，可在 models.ts 的 `ADAPTIVE_THINKING` 按模型名豁免
 - LiteLLM 网关需暴露 Anthropic 协议端点（`/v1/messages`）且 JWT claims 含 `preferred_username`/`email`（`litellm_jwtauth` 字段映射）
 - **omp 限制**：`before_provider_headers` 钩子在 omp 中不触发（omp 无此事件），session/customer header 注入仅 pi 生效；成本跟踪不受此限（用 omp 也有的两个 hook，pi/omp 均生效，已端到端探针确认）。omp 上成本显示为 $0.00 是 LiteLLM 网关侧行为：对 coding-agent CLI 请求路由到免费别名后端（如 `claude-sonnet-5`→`glm-5.3`@智谱），网关上报成本为 0；非零展示需部署侧返回非零成本
 
