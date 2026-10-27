@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-27
+
 ### 新增
 
 - **单进程多 LiteLLM OIDC 实例**：新增 JSON `instances[]` 配置，单份扩展可在 pi / omp 中注册多个独立 provider，各自使用独立的网关、Keycloak、Device Flow、凭据与模型目录。文件发现顺序为显式 `LITELLM_OIDC_CONFIG` > `$PI_CODING_AGENT_DIR/litellm-oidc.json` > 运行时默认路径；文件存在时完全取代 `LITELLM_OIDC_*` 实例配置，无文件时保持 legacy 单实例行为

@@ -110,7 +110,7 @@ env npm_config_registry=https://registry.npmjs.org/ \
 >
 > **refresh 瞬态失败 backoff（v0.10.0 起）**：Keycloak 瞬断/限流时，Pi credential lock 后排队的刷新调用会形成惊群（每次都再打 token endpoint）。扩展按实例与 refresh token 记录 5s backoff 窗口，窗口内直接返回未过期的旧凭据；仅瞬态异常（网络/解析层）记录 backoff，OAuth 语义错误（如 `invalid_grant`）照常抛出强制重新 `/login`，旧 token 已过期时不 backoff（立即重试）。
 
-### 多实例：JSON 配置文件
+### 多实例：JSON 配置文件（v0.11.0 起）
 
 配置文件可在一个 pi / omp 进程中注册多个独立 provider。每个实例拥有自己的网关、Keycloak、凭据和模型目录；文件存在时，`instances[]` **完全取代** `LITELLM_OIDC_*` 实例变量，不做合并。
 
