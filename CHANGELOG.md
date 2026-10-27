@@ -17,6 +17,8 @@
 
 - 配置由模块级单例改为统一归一化的 `InstanceConfig[]`；Keycloak 登录/刷新与模型目录请求显式接收实例配置，refresh transient backoff 按实例 + refresh token 隔离
 - `session` 与成本跟踪保持全局，成本 pending slot 继续按 provider 隔离；文件顶层的 `session` / `customer` / `cost` 可覆盖对应全局环境变量
+- CI 构建镜像改经 Docker registry 中转：`node:22.23` → `docker.io/library/node:22.23`（中转后 amd64 清单的 config digest 与全部层摘要与上游一致）。此前集群内 Kubernetes runner 直连 docker.io 拉取超时并出现清单 size 校验失败的 `runner_system_failure`，verify job 无法启动构建容器
+- CI 测试镜像改经 Docker registry 中转并钉死版本：`oven/bun:1` → `docker.io/library/bun:1.4.4`（原 floating tag 当前即 1.4.4，转后 config digest 与全部层摘要与上游一致）。此前集群内拉取该镜像得到 HTML 错误页（`unexpected media type text/html`），test job 报 `runner_configuration_error`
 
 ### 测试
 
