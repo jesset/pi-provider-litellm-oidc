@@ -7,6 +7,22 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **单进程多 LiteLLM OIDC 实例**：新增 JSON `instances[]` 配置，单份扩展可在 pi / omp 中注册多个独立 provider，各自使用独立的网关、Keycloak、Device Flow、凭据与模型目录。文件发现顺序为显式 `LITELLM_OIDC_CONFIG` > `$PI_CODING_AGENT_DIR/litellm-oidc.json` > 运行时默认路径；文件存在时完全取代 `LITELLM_OIDC_*` 实例配置，无文件时保持 legacy 单实例行为
+- **严格配置校验与实例级静态目录**：未知字段、必填缺失、重复/非法/内置冲突 provider ID、非 HTTPS URL 均在加载时 fail-fast；文件实例可声明完整 `ProviderModelConfig` 的 `fallbackModels`，缺省为空且不继承 LiteLLM 内置目录；实例可覆盖 customer header 与 JWT claim 链
+- `/session-header` 汇总配置来源以及各实例的登录状态、session / customer 注入结果；新增 ADR `docs/adr/0002-multi-instance-config-file.md`
+
+### 变更
+
+- 配置由模块级单例改为统一归一化的 `InstanceConfig[]`；Keycloak 登录/刷新与模型目录请求显式接收实例配置，refresh transient backoff 按实例 + refresh token 隔离
+- `session` 与成本跟踪保持全局，成本 pending slot 继续按 provider 隔离；文件顶层的 `session` / `customer` / `cost` 可覆盖对应全局环境变量
+
+### 测试
+
+- `bun test` 119 个用例：覆盖文件发现与优先级、legacy 兼容、严格 schema、完整 fallbackModels、多实例 Device Flow、请求头与成本分发、`/session-header` 汇总
+- 严格 `tsc`、esbuild 构建与 supply-chain guard 通过；真实 pi / omp 在隔离 agent 目录中完成双 provider 注册冒烟验证
+
 ## [0.10.1] - 2026-09-27
 
 ### 修复

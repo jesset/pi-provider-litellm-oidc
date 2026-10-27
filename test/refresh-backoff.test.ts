@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, setSystemTime } from "bun:test";
 import { refreshAccessToken } from "../extension/keycloak.ts";
+import { testInstance } from "./helpers.ts";
 
 /**
  * A 项（balcsida v3.1.0 吸收）：refresh 瞬态失败 backoff。
@@ -13,6 +14,7 @@ import { refreshAccessToken } from "../extension/keycloak.ts";
 
 const T0 = Date.parse("2026-09-20T10:00:00Z");
 const signal = new AbortController().signal;
+const instance = testInstance();
 
 /** 未过期的旧凭证（expires 在 T0 之后 expiresInMs） */
 function creds(refresh: string, expiresInMs = 60_000) {
@@ -21,6 +23,7 @@ function creds(refresh: string, expiresInMs = 60_000) {
 
 const realFetch = globalThis.fetch;
 let fetchCalls = 0;
+let requestedUrls: string[] = [];
 let respond: () => Promise<Response>;
 
 const transient = () => Promise.reject(new TypeError("fetch failed"));
@@ -31,8 +34,10 @@ const success = () =>
 
 beforeEach(() => {
   fetchCalls = 0;
-  globalThis.fetch = (async () => {
+  requestedUrls = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
     fetchCalls += 1;
+    requestedUrls.push(String(input));
     return respond();
   }) as typeof fetch;
 });
@@ -47,30 +52,30 @@ describe("refreshAccessToken — transient backoff", () => {
     setSystemTime(T0);
     respond = transient;
 
-    await expect(refreshAccessToken(creds("rt-c1"), signal)).rejects.toThrow("fetch failed");
+    await expect(refreshAccessToken(instance, creds("rt-c1"), signal)).rejects.toThrow("fetch failed");
     expect(fetchCalls).toBe(1);
 
     // 窗口内（T0+1s）第二次调用：不发请求，原样返回未过期的旧凭证
     setSystemTime(T0 + 1_000);
-    await expect(refreshAccessToken(creds("rt-c1"), signal)).resolves.toEqual(creds("rt-c1"));
+    await expect(refreshAccessToken(instance, creds("rt-c1"), signal)).resolves.toEqual(creds("rt-c1"));
     expect(fetchCalls).toBe(1);
   });
 
   it("窗口过后恢复重试；成功后清除 backoff 记录（下一次失败可立即再试）", async () => {
     setSystemTime(T0);
     respond = transient;
-    await expect(refreshAccessToken(creds("rt-c2"), signal)).rejects.toThrow("fetch failed");
+    await expect(refreshAccessToken(instance, creds("rt-c2"), signal)).rejects.toThrow("fetch failed");
 
     // 窗口结束（T0+5001ms）重试成功
     setSystemTime(T0 + 5_001);
     respond = success;
-    await expect(refreshAccessToken(creds("rt-c2"), signal)).resolves.toMatchObject({ access: "new-access", refresh: "rt-rotated" });
+    await expect(refreshAccessToken(instance, creds("rt-c2"), signal)).resolves.toMatchObject({ access: "new-access", refresh: "rt-rotated" });
     expect(fetchCalls).toBe(2);
 
     // 成功已清记录：紧接着的新一轮失败会立即打网络（而非沿用旧窗口）
     respond = transient;
     await expect(
-      refreshAccessToken({ access: "new-access", refresh: "rt-rotated", expires: T0 + 6_000 }, signal),
+      refreshAccessToken(instance, { access: "new-access", refresh: "rt-rotated", expires: T0 + 6_000 }, signal),
     ).rejects.toThrow("fetch failed");
     expect(fetchCalls).toBe(3);
   });
@@ -78,12 +83,12 @@ describe("refreshAccessToken — transient backoff", () => {
   it("OAuth 语义错误（4xx invalid_grant）不记 backoff：下次调用立即重试", async () => {
     setSystemTime(T0);
     respond = oauthError;
-    await expect(refreshAccessToken(creds("rt-c3"), signal)).rejects.toThrow(/invalid_grant|Token is not active/);
+    await expect(refreshAccessToken(instance, creds("rt-c3"), signal)).rejects.toThrow(/invalid_grant|Token is not active/);
     expect(fetchCalls).toBe(1);
 
     // 无 backoff 窗口：紧接的第二次调用直接打网络
     respond = success;
-    await expect(refreshAccessToken(creds("rt-c3"), signal)).resolves.toMatchObject({ access: "new-access" });
+    await expect(refreshAccessToken(instance, creds("rt-c3"), signal)).resolves.toMatchObject({ access: "new-access" });
     expect(fetchCalls).toBe(2);
   });
 
@@ -91,30 +96,47 @@ describe("refreshAccessToken — transient backoff", () => {
     setSystemTime(T0);
     respond = transient;
     const expired = { access: "old-access", refresh: "rt-c4", expires: T0 - 1_000 };
-    await expect(refreshAccessToken(expired, signal)).rejects.toThrow("fetch failed");
-    await expect(refreshAccessToken(expired, signal)).rejects.toThrow("fetch failed");
+    await expect(refreshAccessToken(instance, expired, signal)).rejects.toThrow("fetch failed");
+    await expect(refreshAccessToken(instance, expired, signal)).rejects.toThrow("fetch failed");
     expect(fetchCalls).toBe(2);
   });
 
   it("backoff 按 refresh token 隔离：rt-a 的失败不拖累 rt-b", async () => {
     setSystemTime(T0);
     respond = transient;
-    await expect(refreshAccessToken(creds("rt-a"), signal)).rejects.toThrow("fetch failed");
+    await expect(refreshAccessToken(instance, creds("rt-a"), signal)).rejects.toThrow("fetch failed");
 
     respond = success;
-    await expect(refreshAccessToken(creds("rt-b"), signal)).resolves.toMatchObject({ access: "new-access" });
+    await expect(refreshAccessToken(instance, creds("rt-b"), signal)).resolves.toMatchObject({ access: "new-access" });
     expect(fetchCalls).toBe(2);
+  });
+
+  it("backoff 按实例隔离：相同 refresh token 也不共享窗口，且使用各自 token endpoint", async () => {
+    setSystemTime(T0);
+    respond = transient;
+    await expect(refreshAccessToken(instance, creds("rt-shared"), signal)).rejects.toThrow("fetch failed");
+
+    const staging = testInstance({
+      providerId: "staging",
+      keycloakBaseUrl: "https://sso.staging.example.com/",
+      keycloakRealm: "Staging",
+    });
+    respond = success;
+    await expect(refreshAccessToken(staging, creds("rt-shared"), signal)).resolves.toMatchObject({ access: "new-access" });
+    expect(fetchCalls).toBe(2);
+    expect(requestedUrls[0]).toBe("https://keycloak.example.com/realms/Example/protocol/openid-connect/token");
+    expect(requestedUrls[1]).toBe("https://sso.staging.example.com/realms/Staging/protocol/openid-connect/token");
   });
 
   it("backoff 窗口内旧 token 恰好过期：不再返回旧凭证（宁可重试）", async () => {
     setSystemTime(T0);
     respond = transient;
-    await expect(refreshAccessToken(creds("rt-c6", 2_000), signal)).rejects.toThrow("fetch failed");
+    await expect(refreshAccessToken(instance, creds("rt-c6", 2_000), signal)).rejects.toThrow("fetch failed");
 
     // 窗口未过（T0+3s < T0+5s）但凭证已过期（expires=T0+2s）：应打网络而非返回过期凭证
     setSystemTime(T0 + 3_000);
     respond = success;
-    await expect(refreshAccessToken(creds("rt-c6", -1_000), signal)).resolves.toMatchObject({ access: "new-access" });
+    await expect(refreshAccessToken(instance, creds("rt-c6", -1_000), signal)).resolves.toMatchObject({ access: "new-access" });
     expect(fetchCalls).toBe(2);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { fallbackModels, stampCustomerHeader, transformModelInfo } from "../extension/models.ts";
-import { makeJwt, opaqueToken } from "./helpers.ts";
+import { fallbackModels, fetchGatewayModels, stampCustomerHeader, transformModelInfo } from "../extension/models.ts";
+import { makeJwt, opaqueToken, testInstance } from "./helpers.ts";
 
 /** 把结果按 id 索引，断言不依赖数组顺序（Map 按首次出现顺序，但测试应稳）。 */
 function byId(models: ReturnType<typeof transformModelInfo>): Record<string, NonNullable<typeof models>[number]> {
@@ -593,5 +593,38 @@ describe("stampCustomerHeader", () => {
     expect(b).toBe(models);
     expect(c).toBe(models);
     expect(d).toBe(models);
+  });
+});
+
+describe("多实例模型目录", () => {
+  it("legacy 无参数保留内置目录，文件实例空数组不回落内置表", () => {
+    expect(fallbackModels()).toHaveLength(11);
+    expect(fallbackModels(testInstance({ fallbackModels: [] }))).toEqual([]);
+    const custom = fallbackModels()[0];
+    expect(fallbackModels(testInstance({ fallbackModels: [custom] }))).toEqual([custom]);
+  });
+
+  it("fetchGatewayModels 按实例拼接 modelInfoPath 并携带该实例 bearer", async () => {
+    const realFetch = globalThis.fetch;
+    let requestedUrl = "";
+    let authorization = "";
+    try {
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        requestedUrl = String(input);
+        authorization = String((init?.headers as Record<string, string>).authorization);
+        return new Response(JSON.stringify({
+          data: [{ model_name: "smart", model_info: { supports_reasoning: true } }],
+        }), { status: 200 });
+      }) as typeof fetch;
+      const models = await fetchGatewayModels(testInstance({
+        gatewayBaseUrl: "https://gateway.staging.example.com/",
+        modelInfoPath: "/api/model/info",
+      }), "staging-token");
+      expect(requestedUrl).toBe("https://gateway.staging.example.com/api/model/info");
+      expect(authorization).toBe("Bearer staging-token");
+      expect(models?.map((model) => model.id)).toEqual(["smart"]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });

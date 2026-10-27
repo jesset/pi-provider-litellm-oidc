@@ -2,7 +2,7 @@
 
 Pi coding agent 通过 Keycloak OIDC 免配置（keyless）接入 LiteLLM 网关的 provider 扩展，无需任何静态 API Key。一套代码同时适配 pi 与 omp（oh-my-pi）。
 
-内嵌 LiteLLM 默认值开箱即用；全部部署参数可通过环境变量覆盖，支持多套 Keycloak + LiteLLM 网关实例并存。
+内嵌 LiteLLM 默认值开箱即用；环境变量用于单实例部署，JSON 配置文件用于同一 pi / omp 进程内的多实例接入。
 
 ## 架构
 
@@ -83,16 +83,18 @@ env npm_config_registry=https://registry.npmjs.org/ \
 /login litellm              # Keycloak Device Flow 登录（任意设备浏览器完成验证）
 /model litellm/kimi-k2.7-code
 /logout litellm             # 清除凭据
-/session-header              # 查看 session / customer 标识注入配置与当前 session id
+/session-header              # 查看各实例登录状态与 session / customer 注入
 ```
 
-## 通用化配置（环境变量）
+## 配置
 
-未设置任何变量时使用 LiteLLM 默认值。接入另一套 Keycloak + LiteLLM 实例：
+### 单实例：环境变量（legacy）
+
+未发现配置文件时，使用环境变量定义一个实例；未设置任何变量时使用 LiteLLM 默认值：
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `LITELLM_OIDC_PROVIDER_ID` | `litellm` | Pi provider ID（`/login`、`--model` 的前缀）；改它即可多实例并存 |
+| `LITELLM_OIDC_PROVIDER_ID` | `litellm` | 单实例 Pi provider ID（`/login`、`--model` 的前缀） |
 | `LITELLM_OIDC_DISPLAY_NAME` | `LiteLLM Gateway` | UI 显示名 |
 | `LITELLM_OIDC_GATEWAY_URL` | `https://litellm.example.com` | LiteLLM 网关地址 |
 | `LITELLM_OIDC_KEYCLOAK_URL` | `https://keycloak.example.com` | Keycloak 根地址 |
@@ -104,29 +106,69 @@ env npm_config_registry=https://registry.npmjs.org/ \
 
 环境变量写法：`~/.pi/agent/settings.json` 的 `env` 块、shell profile、或启动时 `LITELLM_OIDC_...=... pi`。
 
-> **HTTPS 强制（v0.10.0 起）**：`LITELLM_OIDC_GATEWAY_URL` 与 `LITELLM_OIDC_KEYCLOAK_URL` 必须使用 `https://`——误配 `http://` 会让 JWT 与 refresh token 明文过线，扩展在加载时直接报错（fail-fast）；唯一例外是 loopback 主机（`localhost` / `127.x` / `[::1]`，本地调试代理）。
+> **HTTPS 强制（v0.10.0 起）**：环境变量的 `LITELLM_OIDC_GATEWAY_URL` / `LITELLM_OIDC_KEYCLOAK_URL`，以及配置文件的 `gatewayUrl` / `keycloakUrl` 必须使用 `https://`——误配 `http://` 会让 JWT 与 refresh token 明文过线，扩展在加载时直接报错（fail-fast）；唯一例外是 loopback 主机（`localhost` / `127.x` / `[::1]`，本地调试代理）。
 >
-> **refresh 瞬态失败 backoff（v0.10.0 起）**：Keycloak 瞬断/限流时，Pi credential lock 后排队的刷新调用会形成惊群（每次都再打 token endpoint）。扩展按 refresh token keyed 记 5s backoff 窗口，窗口内直接返回未过期的旧凭据；仅瞬态异常（网络/解析层）记录 backoff，OAuth 语义错误（如 `invalid_grant`）照常抛出强制重新 `/login`，旧 token 已过期时不 backoff（立即重试）。
+> **refresh 瞬态失败 backoff（v0.10.0 起）**：Keycloak 瞬断/限流时，Pi credential lock 后排队的刷新调用会形成惊群（每次都再打 token endpoint）。扩展按实例与 refresh token 记录 5s backoff 窗口，窗口内直接返回未过期的旧凭据；仅瞬态异常（网络/解析层）记录 backoff，OAuth 语义错误（如 `invalid_grant`）照常抛出强制重新 `/login`，旧 token 已过期时不 backoff（立即重试）。
 
-### 多实例示例
+### 多实例：JSON 配置文件
 
-为另一套环境（如 staging 网关）同时注册第二个 provider：
+配置文件可在一个 pi / omp 进程中注册多个独立 provider。每个实例拥有自己的网关、Keycloak、凭据和模型目录；文件存在时，`instances[]` **完全取代** `LITELLM_OIDC_*` 实例变量，不做合并。
 
-```bash
-LITELLM_OIDC_PROVIDER_ID=staging-gateway \
-LITELLM_OIDC_DISPLAY_NAME="Staging Gateway" \
-LITELLM_OIDC_GATEWAY_URL=https://gateway.ai.example.com \
-LITELLM_OIDC_KEYCLOAK_URL=https://keycloak.example.com:443 \
-LITELLM_OIDC_KEYCLOAK_REALM=staging \
-pi
-# 之后 /login staging-gateway 与 /login litellm 互不影响
+发现顺序：
+
+1. `LITELLM_OIDC_CONFIG=/path/to/litellm-oidc.json`（相对路径按当前工作目录解析）；
+2. `$PI_CODING_AGENT_DIR/litellm-oidc.json`；
+3. 运行时默认路径：pi 为 `~/.pi/agent/litellm-oidc.json`；omp 按 `PI_CONFIG_DIR` 与 `OMP_PROFILE` / `PI_PROFILE` 推导，默认为 `~/.omp/agent/litellm-oidc.json`；
+4. 均未发现时回退到环境变量单实例。
+
+显式路径不存在、JSON 非法或任一实例字段错误都会使扩展加载失败，不会静默回退。修改文件后执行 `/reload` 生效。
+
+```json
+{
+  "instances": [
+    {
+      "id": "litellm",
+      "name": "LiteLLM Gateway",
+      "gatewayUrl": "https://litellm.example.com",
+      "keycloakUrl": "https://keycloak.example.com",
+      "realm": "Example",
+      "clientId": "coding-agent-cli"
+    },
+    {
+      "id": "staging",
+      "name": "Staging Gateway",
+      "gatewayUrl": "https://gateway.ai.example.com",
+      "keycloakUrl": "https://keycloak.example.com",
+      "realm": "staging",
+      "clientId": "staging-cli",
+      "scope": "openid profile email offline_access",
+      "modelInfoPath": "/model/info",
+      "customer": { "claims": ["email", "preferred_username"] },
+      "fallbackModels": [
+        {
+          "id": "claude-sonnet-5",
+          "name": "Claude Sonnet 5",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+          "contextWindow": 200000,
+          "maxTokens": 64000,
+          "thinkingLevelMap": { "max": "max" },
+          "compat": { "forceAdaptiveThinking": true }
+        }
+      ]
+    }
+  ]
+}
 ```
 
-> 注意：变量在扩展加载时读取。同一进程内改环境变量需 `/reload`；两套实例并存需要两个 pi 进程或两份扩展副本（改 `LITELLM_OIDC_PROVIDER_ID` 拷贝目录）。单进程多实例的配置文件化（JSON per-instance）是后续演进方向。
+实例必填字段：`id`、`name`、`gatewayUrl`、`keycloakUrl`、`realm`、`clientId`。`scope` 默认 `openid profile email offline_access`，`modelInfoPath` 默认 `/model/info`。`id` 必须全局唯一、使用小写字母/数字开头且不能含 `/`，也不能覆盖 pi / omp 内置 provider。
+
+文件实例的 `fallbackModels` 默认空数组，**不会继承 LiteLLM 内置 11 模型**。网关 `/model/info` 不可用时，如需离线静态目录，必须按完整 `ProviderModelConfig` 显式声明；legacy 环境变量单实例仍保留内置目录。顶层还可选 `session`、`customer`、`cost` 块，用于覆盖对应的全局环境变量；实例内仅 `customer` 可继续覆盖，`session` 与 `cost` 保持全局。
 
 ## Session / Customer 标识注入（网关聚合与用户归因）
 
-`before_provider_headers` 钩子给**仅本 provider** 的 LLM 请求注入两类标识：
+`before_provider_headers` 钩子给**已注册实例**的 LLM 请求注入两类标识，其他 provider 的请求不受影响：
 
 1. **Session 标识**（Pi 会话 UUID）：把同一会话的多次请求（工具调用循环、重试、多 turn）聚合到同一 session。不影响机器上其他 provider 的请求。
 
@@ -154,6 +196,7 @@ pi
 行为要点：
 
 - 重试复用相同 headers，钩子不会重复触发，session id 保持一致
+- 多实例时，同一 session id 会发往各实例网关；A、B 两个网关各自形成独立的 SpendLogs 分组，不表示存在跨网关共享的会话存储
 - `/fork`、`/clone` 生成新 session 文件与新 UUID（合理语义）；子代理与主会话共享同一 id
 - `/new` 或 pi 重启后 id 变化；`pi -c` / `--session` 恢复会话保持原 id
 - 上述 header 解析链于 2026-03 上游合入（PR #22626 起），网关版本较旧时 header 不被解析（注入无害但无聚合效果），需网关侧重升级；`x-litellm-customer-id`/`x-litellm-end-user-id` 为标准 customer 头，官方文档标注"always checked without any configuration"，解析不依赖该新版本链
@@ -176,7 +219,7 @@ pi
 
 ## 模型列表策略
 
-- 启动时注册静态 fallback 列表（11 个常用 chat 模型）
+- 启动时注册静态兜底目录：legacy 环境变量单实例为内置 11 个常用 chat 模型；配置文件实例使用各自的 `fallbackModels`（缺省为空）
 - 网络刷新成功的目录经 `context.publish({ persist })` 持久化到 `~/.pi/agent/models-store.json`，之后离线启动直接恢复真实目录，不再请求网关
 - `refreshModels` 遵守框架两阶段刷新协议：`allowNetwork=false`（扩展注册、每次 refresh 的 phase 1）零网络请求；网络阶段从 `context.credential` 取已刷新的 access token 调 `/model/info`（尊重框架 abort signal 与本地 15s 超时）
 - 数据源用 `/model/info` 而非 `/v1/models`：前者返回 deployment 级 DB 实配值（token limits、`supports_vision`、mode），后者的这些字段来自 LiteLLM 静态 cost map 按公开模型名查找——自研/别名模型（如 `kimi-k2.7-code`）一律缺失，会被误滤掉。要求网关把 `/model/info` 列入 `public_routes`（用户 JWT 可访问）
@@ -185,7 +228,7 @@ pi
 - `model.cost` 从 `/model/info` 的 4 个 per-token 成本字段实配（`input`/`output`/`cache_read_input`/`cache_creation`，多 deployment 取 max 上界，缺失保持 0）——请求前估算与 `x-litellm-response-cost` 实付口径互补
 - `reasoning` 四级回落推断：网关 `supports_reasoning` 声明层三态 → `reasoning_effort_levels`（档位存在即推理）→ `supported_openai_params` 含 `reasoning_effort`/`thinking` → 名字前缀正则 `REASONING_MODEL_PATTERN` 兜底（覆盖稀疏模型）
 - 思考档位自动推导 + 菜单精确对齐（v0.10.1 起）：网关 `model_info` 的 `reasoning_effort_levels`（完整档集，同名多 deployment 取交集，未知档名忽略）或 `supports_{xhigh,max}_reasoning_effort` 布尔可精确声明档位——**有档位时菜单与档集精确对齐**：档集内的档直传自身 effort（选什么发什么），档集外的默认档以 `null` 从菜单显式排除，网关 `none` 档即 off（不含则 `off:null`——不发 disabled，对强制思考后端会 4xx，显式 off 请求 clamp 最低档）；**无档位（或同名组交集为空）**维持 `{ max: "max" }` 兜底（v0.8.0 行为，全菜单可选）。`forceAdaptiveThinking` 对全部推理模型保留（effort 传递通道：budget 路径无法表达档位枚举）。实测 glm-5.2 max 比 high 多约 70% 思考量。LiteLLM 网关已配档位字段（2026-09-27 探针）：glm-5.3 系 / k3 系 / claude 系（`['low','high','max']`）菜单为 low/high/max 三档；deepseek-flash（`['none','low','high','max']`）菜单为 off/low/high/max；设计决策见 `docs/adr/0001`
-- 未登录或拉取失败时回退 持久化目录 ?? fallback 列表
+- 未登录或拉取失败时回退该实例的持久化目录 ?? 静态兜底目录
 
 ## 验证行为说明
 

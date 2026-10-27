@@ -1,7 +1,8 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { createHash, randomBytes } from "node:crypto";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@earendil-works/pi-ai";
-import { config, keycloak } from "./config.ts";
+import { trimTrailingSlash } from "./config.ts";
+import type { InstanceConfig } from "./config.ts";
 
 /** 新 AuthInteraction 通道的 device_code 通知事件；legacy 通道无 notify 字段 */
 interface DeviceCodeNotifyEvent {
@@ -88,20 +89,26 @@ export function generateCodeVerifier(): string {
   return randomBytes(32).toString("base64url");
 }
 
+function keycloakEndpoints(instance: InstanceConfig): { device: string; token: string } {
+  const realmBase = `${trimTrailingSlash(instance.keycloakBaseUrl)}/realms/${instance.keycloakRealm}/protocol/openid-connect`;
+  return { device: `${realmBase}/auth/device`, token: `${realmBase}/token` };
+}
+
 /** RFC 8628 Device Authorization Flow against Keycloak. */
-export async function loginDeviceFlow(callbacks: LoginCallbacks): Promise<OAuthCredentials> {
+export async function loginDeviceFlow(instance: InstanceConfig, callbacks: LoginCallbacks): Promise<OAuthCredentials> {
   const signal = callbacks.signal;
+  const endpoints = keycloakEndpoints(instance);
 
   // PKCE（见上文）：每个 device flow 会话独立 verifier，challenge 随授权请求发出，
   // verifier 在 token 轮询时兑现——窃取 device_code 无法单独兑换 token
   const codeVerifier = generateCodeVerifier();
 
-  const deviceRes = await fetch(keycloak.deviceEndpoint, {
+  const deviceRes = await fetch(endpoints.device, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: config.keycloakClientId,
-      scope: config.keycloakScope,
+      client_id: instance.keycloakClientId,
+      scope: instance.keycloakScope,
       code_challenge: pkceChallenge(codeVerifier),
       code_challenge_method: "S256",
     }).toString(),
@@ -154,10 +161,10 @@ export async function loginDeviceFlow(callbacks: LoginCallbacks): Promise<OAuthC
     signal?.throwIfAborted();
 
     const poll = await postForm(
-      keycloak.tokenEndpoint,
+      endpoints.token,
       {
         grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-        client_id: config.keycloakClientId,
+        client_id: instance.keycloakClientId,
         device_code: device.device_code,
         code_verifier: codeVerifier,
       },
@@ -198,28 +205,30 @@ const TRANSIENT_REFRESH_BACKOFF_MS = 5_000;
 const transientRefreshBackoffUntil = new Map<string, number>();
 
 /** RFC 6749 refresh_token grant. Keycloak rotates refresh tokens; the new one must be persisted. */
-export async function refreshAccessToken(credentials: OAuthCredentials, signal: AbortSignal): Promise<OAuthCredentials> {
+export async function refreshAccessToken(instance: InstanceConfig, credentials: OAuthCredentials, signal: AbortSignal): Promise<OAuthCredentials> {
   signal.throwIfAborted();
-  const holdUntil = transientRefreshBackoffUntil.get(credentials.refresh);
+  const backoffKey = `${instance.providerId}\0${credentials.refresh}`;
+  const holdUntil = transientRefreshBackoffUntil.get(backoffKey);
   if (holdUntil !== undefined && Date.now() < holdUntil && Date.now() < credentials.expires) {
     return credentials;
   }
+  const endpoints = keycloakEndpoints(instance);
   try {
     const tokens = await postForm(
-      keycloak.tokenEndpoint,
+      endpoints.token,
       {
         grant_type: "refresh_token",
-        client_id: config.keycloakClientId,
+        client_id: instance.keycloakClientId,
         refresh_token: credentials.refresh,
-        scope: config.keycloakScope,
+        scope: instance.keycloakScope,
       },
       signal,
     );
-    transientRefreshBackoffUntil.delete(credentials.refresh);
+    transientRefreshBackoffUntil.delete(backoffKey);
     return toCredentials(tokens);
   } catch (err) {
     if (!(err instanceof OAuthHttpError) && Date.now() < credentials.expires) {
-      transientRefreshBackoffUntil.set(credentials.refresh, Date.now() + TRANSIENT_REFRESH_BACKOFF_MS);
+      transientRefreshBackoffUntil.set(backoffKey, Date.now() + TRANSIENT_REFRESH_BACKOFF_MS);
     }
     throw err;
   }
