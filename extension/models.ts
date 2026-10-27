@@ -1,6 +1,7 @@
 import type { ModelsStoreEntry } from "@earendil-works/pi-ai";
 import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
-import { modelInfoEndpoint } from "./config.ts";
+import { trimTrailingSlash } from "./config.ts";
+import type { InstanceConfig } from "./config.ts";
 import { extractJwtClaim } from "./keycloak.ts";
 
 /** /model/info 返回的 deployment 级条目（只取关心的字段；同名多 deployment 多行） */
@@ -182,8 +183,8 @@ const FALLBACK_MODELS: ProviderModelConfig[] = [
   ...ADAPTIVE_THINKING,
 }));
 
-export function fallbackModels(): ProviderModelConfig[] {
-  return FALLBACK_MODELS;
+export function fallbackModels(instance?: Pick<InstanceConfig, "fallbackModels">): ProviderModelConfig[] {
+  return instance?.fallbackModels ?? FALLBACK_MODELS;
 }
 
 /**
@@ -352,12 +353,13 @@ export function stampCustomerHeader<T extends { headers?: Record<string, string>
   return models.map((m) => ({ ...m, headers: { ...m.headers, [header]: customerId } }));
 }
 
-export async function fetchGatewayModels(bearerToken: string, signal?: AbortSignal): Promise<ProviderModelConfig[] | null> {
+export async function fetchGatewayModels(instance: InstanceConfig, bearerToken: string, signal?: AbortSignal): Promise<ProviderModelConfig[] | null> {
   try {
     // 15s 本地超时；传入框架共享 abort signal 时任一触发即取消
     // （框架侧取消——如登录后目录刷新超时——应立即中断，而非占用 socket 到本地超时）
     const timeout = AbortSignal.timeout(15000);
-    const response = await fetch(modelInfoEndpoint, {
+    const baseUrl = trimTrailingSlash(instance.gatewayBaseUrl);
+    const response = await fetch(`${baseUrl}${instance.modelInfoPath}`, {
       headers: { authorization: `Bearer ${bearerToken}` },
       signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     });
