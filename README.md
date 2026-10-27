@@ -263,6 +263,6 @@ rm -rf node_modules
 
 - publish job 发布前断言 tag == `package.json` version == `package-lock.json` version，杜绝打错 tag 静默发布错版
 - `scripts/supply-chain-guard.mjs`（verify/publish 均执行）强制五类不变量：禁安装期脚本（`preinstall`/`install`/`postinstall`；`prepare` 例外——git 源安装的生命线）、零运行时依赖、禁非 registry 依赖 spec（`git:`/`file:`/`link:` 等）、lockfile `resolved` 域名白名单（registry.npmjs.org + github.com/jesset）、npm pack 文件白名单精确到文件名（仅 `LICENSE`/`README.md`/`dist/index.js`/`package.json`）
-- CI 装依赖用 `npm ci --ignore-scripts`（`prepare` 被跳过，构建统一走显式 `npm run build`）；CI 镜像 pin 到次版本 `node:22.23`
+- CI 装依赖用 `npm ci --ignore-scripts`（`prepare` 被跳过，构建统一走显式 `npm run build`）；CI 镜像 pin 到次版本并经 Docker registry 中转（`docker.io/library/node:22.23`，内容与上游 amd64 清单一致；集群内 runner 直连 docker.io 拉取不可靠）
 
 这些机制防的是**发布管线与依赖供应链**（恶意依赖、安装期脚本、非 registry 来源、版本漂移），与客户端防篡改（minify 提高门槛）是两个互补的威胁面。
