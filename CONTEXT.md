@@ -18,6 +18,16 @@ _Avoid_: 模型（指轮询单位时）
 网关 `reasoning_effort_levels` 声明的思考档集，取值为 LiteLLM `REASONING_EFFORT` 七值：`none/minimal/low/medium/high/xhigh/max`。
 _Avoid_: effort 档、推理级别
 
+### 接入与配置
+
+**Instance（实例）**：
+一套 LiteLLM 网关及其 Keycloak realm/client 的接入配置；一个实例注册为一个 Pi provider。
+_Avoid_: provider（指配置单元时）、站点、部署实例
+
+**Pi provider**：
+Pi 运行时注册与选择模型的单元（`/login <id>`、`--model <id>/<model>` 的前缀），凭据与模型目录以它为键。
+_Avoid_: instance（指 Pi 注册单元时）
+
 ### pi 侧
 
 **思考级别（thinking level）**：
@@ -37,6 +47,10 @@ _Avoid_: 近似对齐
 **档位兜底（level fallback）**：
 网关未声明档位（或同名组交集为空）时的默认菜单行为：仅显式声明 max，其余默认档可选（v0.8.0 起行为）。
 _Avoid_: hack 兜底
+
+**静态兜底目录（fallback catalog）**：
+`/model/info` 不可用时使用的静态模型目录，只用于离线/失败兜底；模型能力仍以网关声明为权威。
+_Avoid_: 模型清单（指能力声明时）
 
 **网关声明权威（gateway authority）**：
 模型能力以网关 model_info 为唯一权威，客户端不修补权威数据——网关误配直接反映到用户菜单。
