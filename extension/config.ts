@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
@@ -45,15 +46,31 @@ export type ReadConfigFile = (path: string) => string;
 
 const DEFAULT_SCOPE = "openid profile email offline_access";
 const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
-const RESERVED_PROVIDER_IDS = new Set([
+/**
+ * 内置 provider 保留名单：pi（pi-ai 0.84.2 models.generated + radius）与
+ * omp（pi-ai 18.1.3 registry/*.ts）两侧的并集。扩展无法值导入框架枚举
+ * （bundle external 约束），只能静态维护——升级任一运行时后需核对同步。
+ */
+const PI_BUILTIN_PROVIDER_IDS = [
   "amazon-bedrock", "ant-ling", "anthropic", "azure-openai-responses", "baseten", "cerebras",
   "cloudflare-ai-gateway", "cloudflare-workers-ai", "deepseek", "fireworks", "github-copilot",
   "google", "google-vertex", "groq", "huggingface", "kimi-coding", "minimax", "minimax-cn",
   "mistral", "moonshotai", "moonshotai-cn", "nvidia", "openai", "openai-codex", "opencode",
   "opencode-go", "openrouter", "qwen-token-plan", "qwen-token-plan-cn", "qwen-token-plan-individual",
-  "radius", "together", "vercel-ai-gateway", "xai", "xiaomi", "xiaomi-token-plan-ams", "xiaomi-token-plan-cn",
-  "xiaomi-token-plan-sgp", "zai", "zai-coding-cn",
-]);
+  "radius", "together", "vercel-ai-gateway", "xai", "xiaomi", "xiaomi-token-plan-ams",
+  "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp", "zai", "zai-coding-cn",
+];
+const OMP_BUILTIN_PROVIDER_IDS = [
+  "aiand", "aimlapi", "alibaba-coding-plan", "alibaba-token-plan", "azure", "bedrock-mantle",
+  "cline-pass", "coreweave", "cursor", "deepinfra", "devin", "exa", "firepass", "gitlab-duo",
+  "gitlab-duo-agent", "gmi-cloud", "google-antigravity", "google-gemini-cli", "kagi", "kilo",
+  "kimi-code", "litellm", "lm-studio", "meta", "minimax-code", "minimax-code-cn", "moonshot",
+  "nanogpt", "novita", "ollama", "ollama-cloud", "openai-codex-device", "opencode-zen",
+  "parallel", "perplexity", "qianfan", "qwen-portal", "sakana", "siliconflow", "siliconflow-cn",
+  "synthetic", "tavily", "typesafe", "umans", "venice", "vllm", "wafer-serverless", "xai-oauth",
+  "yolo-auto", "zai-coding-plan", "zenmux", "zhipu-coding-plan",
+];
+const RESERVED_PROVIDER_IDS = new Set([...PI_BUILTIN_PROVIDER_IDS, ...OMP_BUILTIN_PROVIDER_IDS]);
 
 const envValue = (env: NodeJS.ProcessEnv, name: string, fallback: string): string =>
   env[name]?.trim() || fallback;
@@ -227,39 +244,18 @@ function modelCost(value: unknown, path: string): ProviderModelConfig["cost"] {
   return value as ProviderModelConfig["cost"];
 }
 
-const COMPAT_BOOLEAN_FIELDS = [
-  "supportsStore", "supportsDeveloperRole", "supportsReasoningEffort", "supportsUsageInStreaming",
-  "supportsFinishReason", "requiresToolResultName", "requiresAssistantAfterToolResult", "requiresThinkingAsText",
-  "requiresReasoningContentOnAssistantMessages", "zaiToolStream", "supportsThinkingTokenBudget",
-  "supportsOpenAIGrammarTools", "supportsStrictMode", "sendSessionAffinityHeaders", "supportsLongCacheRetention",
-  "supportsAdditionalTools", "supportsToolSearch", "supportsExplicitPromptCacheMode", "supportsEagerToolInputStreaming",
-  "supportsCacheControlOnTools", "supportsTemperature", "forceAdaptiveThinking", "allowEmptySignature",
-  "supportsStrictTools", "supportsToolReferences",
-] as const;
-const COMPAT_STRING_FIELDS = ["maxTokensField", "thinkingFormat", "cacheControlFormat", "deferredToolsMode", "sessionAffinityFormat"] as const;
-const COMPAT_RECORD_FIELDS = ["chatTemplateKwargs", "chatTemplateArgs", "openRouterRouting", "vercelGatewayRouting"] as const;
-const COMPAT_FIELDS = new Set<string>([...COMPAT_BOOLEAN_FIELDS, ...COMPAT_STRING_FIELDS, ...COMPAT_RECORD_FIELDS]);
-
+/**
+ * compat 透传校验：pi-ai 拥有该 schema，且 pi 与 omp 两套运行时的字段集已经不同
+ * （omp 18.1.3 无 forceAdaptiveThinking、pi 0.84.2 无 litellm/cline-pass 特有字段），
+ * 静态白名单必然随框架版本脱节、拒绝合法配置。这里只校验顶层值是合法 JSON 值，
+ * 字段名与枚举交由框架解析——框架对未知 compat 字段的语义是忽略。
+ */
 function modelCompat(value: unknown, path: string): void {
   const raw = record(value, path);
-  knownFields(raw, [...COMPAT_FIELDS], path);
-  for (const key of COMPAT_BOOLEAN_FIELDS) {
-    if (raw[key] !== undefined) booleanValue(raw[key], `${path}.${key}`);
-  }
-  for (const key of COMPAT_STRING_FIELDS) {
-    if (raw[key] !== undefined) stringValue(raw[key], `${path}.${key}`);
-  }
-  for (const key of COMPAT_RECORD_FIELDS) {
-    if (raw[key] !== undefined) record(raw[key], `${path}.${key}`);
-  }
-  if (raw.openRouterRouting !== undefined) {
-    knownFields(record(raw.openRouterRouting, `${path}.openRouterRouting`), [
-      "allow_fallbacks", "require_parameters", "data_collection", "zdr", "enforce_distillable_text",
-      "order", "only", "ignore", "quantizations", "sort", "max_price", "preferred_min_throughput", "preferred_max_latency",
-    ], `${path}.openRouterRouting`);
-  }
-  if (raw.vercelGatewayRouting !== undefined) {
-    knownFields(record(raw.vercelGatewayRouting, `${path}.vercelGatewayRouting`), ["only", "order"], `${path}.vercelGatewayRouting`);
+  for (const [key, entry] of Object.entries(raw)) {
+    if (entry === null || typeof entry === "object") continue;
+    if (typeof entry === "boolean" || typeof entry === "string" || typeof entry === "number") continue;
+    throw new Error(`${path}.${key} 必须是 JSON 值（布尔/字符串/数字/对象/数组/null）`);
   }
 }
 
@@ -273,7 +269,10 @@ function fallbackModel(value: unknown, path: string): ProviderModelConfig {
   requiredString(raw, "id", path);
   requiredString(raw, "name", path);
   if (raw.api !== undefined) stringValue(raw.api, `${path}.api`);
-  if (raw.baseUrl !== undefined) stringValue(raw.baseUrl, `${path}.baseUrl`);
+  if (raw.baseUrl !== undefined) {
+    // 模型级 baseUrl 覆盖 provider 网关地址，authHeader 仍会携带 JWT——同受 HTTPS 强制
+    assertSecureUrl(`${path}.baseUrl`, stringValue(raw.baseUrl, `${path}.baseUrl`));
+  }
   if (raw.reasoning === undefined) throw new Error(`${path}.reasoning 为必填字段`);
   booleanValue(raw.reasoning, `${path}.reasoning`);
   if (!Array.isArray(raw.input) || raw.input.length === 0) throw new Error(`${path}.input 必须是非空数组`);
@@ -330,6 +329,12 @@ export function parseConfigFile(raw: unknown, source: string, env: NodeJS.Proces
     if (!PROVIDER_ID_PATTERN.test(providerId)) {
       throw new Error(`${path}.id 必须匹配 ${PROVIDER_ID_PATTERN.source}（小写字母或数字开头，不含 /）`);
     }
+    // Object.prototype 属性名（constructor/toString/__proto__ 等）会命中框架存储的
+    // 原型链读取（models-store 的 data[providerId] 取到继承函数，structuredClone 抛
+    // DataCloneError），一律拒绝
+    if (providerId in Object.prototype) {
+      throw new Error(`${path}.id 不允许使用保留属性名: ${providerId}`);
+    }
     if (RESERVED_PROVIDER_IDS.has(providerId)) throw new Error(`${path}.id 与内置 provider 冲突: ${providerId}`);
     const normalizedId = providerId.toLowerCase();
     if (seen.has(normalizedId)) throw new Error(`instances 中 provider id 重复: ${providerId}`);
@@ -378,9 +383,14 @@ function defaultConfigPaths(env: NodeJS.ProcessEnv, execPath: string, homeDir: s
   const piPath = join(homeDir, ".pi", "agent", "litellm-oidc.json");
   const ompPath = ompDefaultConfigPath(env, homeDir);
   const executable = basename(execPath).toLowerCase().replace(/\.exe$/, "");
+  // omp 以 #!/usr/bin/env bun 脚本分发（实测 18.1.3）——bun 宿主下 execPath 是 bun
+  // 本身，无法凭它区分承载的是 omp 还是 pi，只能按 pi → omp 顺序探测两个默认路径
   if (executable === "omp") return [ompPath];
-  if (["pi", "node", "nodejs", "bun"].includes(executable)) return [piPath];
-  console.error(`[pi-provider-litellm-oidc] 无法识别运行时 ${execPath}，按 pi → omp 顺序探测配置文件`);
+  if (["pi", "node", "nodejs"].includes(executable)) return [piPath];
+  console.error(
+    `[pi-provider-litellm-oidc] 无法从 ${execPath} 确定宿主 CLI，按 pi → omp 顺序探测配置文件；` +
+      "如需精确指定请设置 LITELLM_OIDC_CONFIG 或 PI_CODING_AGENT_DIR",
+  );
   return [piPath, ompPath];
 }
 
@@ -446,11 +456,14 @@ export function assertSecureUrl(name: string, url: string): void {
   } catch {
     throw new Error(`${name} 不是合法 URL: ${url}`);
   }
+  // loopback 例外：localhost / ::1 / 127.0.0.0/8。必须先确认是 IPv4 字面量再判
+  // 127 前缀——`127.evil.example.com` 是攻击者可注册的合法域名，startsWith("127.")
+  // 会误放行
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, "");
   const loopback =
-    parsed.hostname === "localhost" ||
-    parsed.hostname.startsWith("127.") ||
-    parsed.hostname === "[::1]" ||
-    parsed.hostname === "::1";
+    hostname === "localhost" ||
+    hostname === "::1" ||
+    (isIP(hostname) === 4 && hostname.startsWith("127."));
   if (parsed.protocol === "https:" || (parsed.protocol === "http:" && loopback)) return;
   throw new Error(
     `${name} 必须使用 https（当前 ${url}）：http 会明文发送 JWT 与 refresh token，仅 loopback 主机例外`,

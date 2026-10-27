@@ -167,4 +167,84 @@ describe("多实例扩展装配", () => {
     expect(notifications[0]).toContain("[staging] Staging Gateway");
     expect(notifications[0]).toContain("x-staging-user: alice");
   });
+
+  it("refreshModels 两阶段：phase 1 零网络恢复各自 stored，网络阶段各自拉取并隔离持久化", async () => {
+    const { pi, providers } = fakePi();
+    setupExtension(pi, runtimeConfig());
+    const storedModel = { id: "stored-model", name: "stored-model", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1000, maxTokens: 100 };
+    const litellm = providers.get("litellm")!;
+    const staging = providers.get("staging")!;
+
+    // phase 1（allowNetwork=false）：各自恢复 stored，绝不打网络；无 stored 时用各自 fallback（文件实例为空）
+    const offlineA = await litellm.refreshModels!({
+      allowNetwork: false,
+      stored: { models: [storedModel], checkedAt: 1 } as any,
+      publish: async () => false,
+      signal: new AbortController().signal,
+    } as any);
+    const offlineB = await staging.refreshModels!({
+      allowNetwork: false,
+      stored: undefined,
+      publish: async () => false,
+      signal: new AbortController().signal,
+    } as any);
+    expect(offlineA.map((model) => model.id)).toEqual(["stored-model"]);
+    expect(offlineB).toEqual([]);
+
+    // 网络阶段：各实例拉各自的 /model/info，persist 按实例隔离
+    const realFetch = globalThis.fetch;
+    const persistCalls: Array<{ models: unknown[]; publish: (publication: unknown) => Promise<boolean> }> = [];
+    try {
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        const models = url.includes("example.com")
+          ? [{ model_name: "litellm-live", model_info: {} }]
+          : [{ model_name: "staging-live", model_info: {} }];
+        return new Response(JSON.stringify({ data: models }), { status: 200 });
+      }) as typeof fetch;
+
+      for (const [id, provider] of [["litellm", litellm], ["staging", staging]] as const) {
+        const published: unknown[] = [];
+        const result = await provider.refreshModels!({
+          allowNetwork: true,
+          credential: { type: "oauth", access: `${id}-token`, refresh: "r", expires: Date.now() + 60_000 },
+          publish: (publication: any) => {
+            published.push(publication.persist);
+            return Promise.resolve(true);
+          },
+          signal: new AbortController().signal,
+        } as any);
+        expect(result.map((model) => model.id)).toEqual([`${id}-live`]);
+        expect(published).toHaveLength(1);
+        persistCalls.push({ models: (published[0] as any).models, publish: publication => Promise.resolve(true) });
+      }
+      expect(persistCalls[0].models.map((m: any) => m.id)).toEqual(["litellm-live"]);
+      expect(persistCalls[1].models.map((m: any) => m.id)).toEqual(["staging-live"]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+
+    // 网络失败（非 2xx）回落 stored ?? 各自 fallback：litellm 有 stored 恢复、staging 无 stored 得空数组
+    globalThis.fetch = (async () => new Response("boom", { status: 502 })) as typeof fetch;
+    try {
+      const failedA = await litellm.refreshModels!({
+        allowNetwork: true,
+        credential: { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 60_000 },
+        stored: { models: [storedModel], checkedAt: 1 } as any,
+        publish: async () => false,
+        signal: new AbortController().signal,
+      } as any);
+      const failedB = await staging.refreshModels!({
+        allowNetwork: true,
+        credential: { type: "oauth", access: "b", refresh: "r", expires: Date.now() + 60_000 },
+        stored: undefined,
+        publish: async () => false,
+        signal: new AbortController().signal,
+      } as any);
+      expect(failedA.map((model) => model.id)).toEqual(["stored-model"]);
+      expect(failedB).toEqual([]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
 });

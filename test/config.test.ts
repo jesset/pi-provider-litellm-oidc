@@ -55,7 +55,13 @@ describe("assertSecureUrl", () => {
   it("http loopback 例外", () => {
     expect(() => assertSecureUrl("gateway", "http://localhost:4000")).not.toThrow();
     expect(() => assertSecureUrl("gateway", "http://127.0.0.1:4000")).not.toThrow();
+    expect(() => assertSecureUrl("gateway", "http://127.255.255.254:4000")).not.toThrow();
     expect(() => assertSecureUrl("gateway", "http://[::1]:4000")).not.toThrow();
+  });
+
+  it("127 开头的域名不是 loopback（startsWith 误放行修复）", () => {
+    expect(() => assertSecureUrl("gateway", "http://127.evil.example.com")).toThrow(/https/);
+    expect(() => assertSecureUrl("gateway", "http://127.0.0.1.evil.example.com")).toThrow(/https/);
   });
 
   it("非 http(s) 协议或非法 URL 抛错", () => {
@@ -170,6 +176,20 @@ describe("配置文件发现", () => {
     expect(config.source).toBe(`file:${path}`);
   });
 
+  it("bun 宿主（omp 以 env bun 脚本分发）按 pi → omp 顺序探测", () => {
+    const warning = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const path = "/home/test/.omp/agent/litellm-oidc.json";
+      const files = reader({ [path]: json(document()) });
+      const config = loadRuntimeConfig({}, files.read, "/Users/test/.bun/bin/bun", HOME);
+      expect(config.source).toBe(`file:${path}`);
+      expect(files.calls).toEqual([PI_DEFAULT, path]);
+      expect(warning).toHaveBeenCalledTimes(1);
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   it("未知运行时按 pi → omp 顺序探测", () => {
     const warning = spyOn(console, "error").mockImplementation(() => {});
     try {
@@ -244,19 +264,34 @@ describe("文件 schema 与归一化", () => {
     expect(config.instances[0].fallbackModels).toEqual([model]);
   });
 
-  it("compat 拒绝未知字段与非布尔标志，开放 Record 自定义键保持透传", () => {
+  it("compat 透传：框架 schema 归 pi-ai 所有，未知字段与嵌套结构放行，仅拒绝非 JSON 值", () => {
     const model = {
       id: "x", name: "x", reasoning: true, input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1000, maxTokens: 100,
     };
+    // 未来框架版本的合法字段（本机两套运行时字段集已不同）必须能通过
     expect(() => parseConfigFile({
-      instances: [{ ...instance(), fallbackModels: [{ ...model, compat: { forceAdaptiveThinking: true, typo: true } }] }],
-    }, "file:test", {})).toThrow(/compat 含未知字段: typo/);
+      instances: [{ ...instance(), fallbackModels: [{ ...model, compat: { supportsMidConvoEffort: true, allowedFallbackModels: ["a"] } }] }],
+    }, "file:test", {})).not.toThrow();
     expect(() => parseConfigFile({
-      instances: [{ ...instance(), fallbackModels: [{ ...model, compat: { forceAdaptiveThinking: "yes" } }] }],
-    }, "file:test", {})).toThrow(/forceAdaptiveThinking 必须是布尔值/);
+      instances: [{ ...instance(), fallbackModels: [{ ...model, compat: { openRouterRouting: { order: ["x"], max_price: { prompt: 1 } } } }] }],
+    }, "file:test", {})).not.toThrow();
+    // 非 JSON 值（直接调用 parseConfigFile 可传入函数）拒绝
     expect(() => parseConfigFile({
-      instances: [{ ...instance(), fallbackModels: [{ ...model, compat: { chatTemplateKwargs: { $custom: "thinking.enabled" } } }] }],
+      instances: [{ ...instance(), fallbackModels: [{ ...model, compat: { forceAdaptiveThinking: (() => {}) as unknown as boolean } }] }],
+    }, "file:test", {})).toThrow(/必须是 JSON 值/);
+  });
+
+  it("fallbackModels[].baseUrl 同受 HTTPS 强制", () => {
+    const model = {
+      id: "x", name: "x", reasoning: false, input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1000, maxTokens: 100,
+    };
+    expect(() => parseConfigFile({
+      instances: [{ ...instance(), fallbackModels: [{ ...model, baseUrl: "http://insecure.example.com" }] }],
+    }, "file:test", {})).toThrow(/baseUrl/);
+    expect(() => parseConfigFile({
+      instances: [{ ...instance(), fallbackModels: [{ ...model, baseUrl: "http://localhost:4000" }] }],
     }, "file:test", {})).not.toThrow();
   });
 
@@ -292,6 +327,20 @@ describe("文件 schema 与归一化", () => {
     expect(() => parseConfigFile({ instances: [instance("Bad/Id")] }, "file:test", {})).toThrow(/必须匹配/);
     expect(() => parseConfigFile({ instances: [instance("anthropic")] }, "file:test", {})).toThrow(/内置 provider/);
     expect(() => parseConfigFile({ instances: [instance("radius")] }, "file:test", {})).toThrow(/内置 provider/);
+    // omp 内置（pi-ai 18.1.3 registry）与本机在用的 provider
+    expect(() => parseConfigFile({ instances: [instance("azure")] }, "file:test", {})).toThrow(/内置 provider/);
+    expect(() => parseConfigFile({ instances: [instance("meta")] }, "file:test", {})).toThrow(/内置 provider/);
+    expect(() => parseConfigFile({ instances: [instance("typesafe")] }, "file:test", {})).toThrow(/内置 provider/);
+    expect(() => parseConfigFile({ instances: [instance("litellm")] }, "file:test", {})).toThrow(/内置 provider/);
+  });
+
+  it("拒绝 Object.prototype 属性名（models-store 原型链读取会 structuredClone 抛错）", () => {
+    // constructor 是唯一能穿过小写 pattern 且命中原型链的属性名
+    expect(() => parseConfigFile({ instances: [instance("constructor")] }, "file:test", {})).toThrow(/保留属性名/);
+    // 驼峰原型属性名（toString/hasOwnProperty）与 __proto__ 被 pattern 先行拒绝，同样不可用
+    expect(() => parseConfigFile({ instances: [instance("toString")] }, "file:test", {})).toThrow(/必须匹配/);
+    expect(() => parseConfigFile({ instances: [instance("hasOwnProperty")] }, "file:test", {})).toThrow(/必须匹配/);
+    expect(() => parseConfigFile({ instances: [instance("__proto__")] }, "file:test", {})).toThrow(/必须匹配/);
   });
 
   it("文件实例 URL 强制 HTTPS，loopback 例外", () => {

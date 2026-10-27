@@ -118,7 +118,7 @@ env npm_config_registry=https://registry.npmjs.org/ \
 
 1. `LITELLM_OIDC_CONFIG=/path/to/litellm-oidc.json`（相对路径按当前工作目录解析）；
 2. `$PI_CODING_AGENT_DIR/litellm-oidc.json`；
-3. 运行时默认路径：pi 为 `~/.pi/agent/litellm-oidc.json`；omp 按 `PI_CONFIG_DIR` 与 `OMP_PROFILE` / `PI_PROFILE` 推导，默认为 `~/.omp/agent/litellm-oidc.json`；
+3. 运行时默认路径：pi 为 `~/.pi/agent/litellm-oidc.json`；omp 按 `PI_CONFIG_DIR` 与 `OMP_PROFILE` / `PI_PROFILE` 推导，默认为 `~/.omp/agent/litellm-oidc.json`。宿主无法从 `process.execPath` 确定（omp 以 `#!/usr/bin/env bun` 脚本分发，bun 下 execPath 是 bun 本身）时，按 pi → omp 顺序探测两个默认路径并输出一条告警；
 4. 均未发现时回退到环境变量单实例。
 
 显式路径不存在、JSON 非法或任一实例字段错误都会使扩展加载失败，不会静默回退。修改文件后执行 `/reload` 生效。
@@ -162,7 +162,7 @@ env npm_config_registry=https://registry.npmjs.org/ \
 }
 ```
 
-实例必填字段：`id`、`name`、`gatewayUrl`、`keycloakUrl`、`realm`、`clientId`。`scope` 默认 `openid profile email offline_access`，`modelInfoPath` 默认 `/model/info`。`id` 必须全局唯一、使用小写字母/数字开头且不能含 `/`，也不能覆盖 pi / omp 内置 provider。
+实例必填字段：`id`、`name`、`gatewayUrl`、`keycloakUrl`、`realm`、`clientId`。`scope` 默认 `openid profile email offline_access`，`modelInfoPath` 默认 `/model/info`。`id` 必须全局唯一、使用小写字母/数字开头且不能含 `/`，不能是 `constructor` 等保留属性名，也不能覆盖 pi / omp 内置 provider（保留名单为两侧框架 registry 的并集）。
 
 文件实例的 `fallbackModels` 默认空数组，**不会继承 LiteLLM 内置 11 模型**。网关 `/model/info` 不可用时，如需离线静态目录，必须按完整 `ProviderModelConfig` 显式声明；legacy 环境变量单实例仍保留内置目录。顶层还可选 `session`、`customer`、`cost` 块，用于覆盖对应的全局环境变量；实例内仅 `customer` 可继续覆盖，`session` 与 `cost` 保持全局。
 

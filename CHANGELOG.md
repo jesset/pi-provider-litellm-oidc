@@ -22,8 +22,16 @@
 
 ### 测试
 
-- `bun test` 119 个用例：覆盖文件发现与优先级、legacy 兼容、严格 schema、完整 fallbackModels、多实例 Device Flow、请求头与成本分发、`/session-header` 汇总
+- `bun test` 124 个用例：覆盖文件发现与优先级、legacy 兼容、严格 schema、完整 fallbackModels、多实例 Device Flow、请求头与成本分发、refreshModels 两阶段隔离、`/session-header` 汇总
 - 严格 `tsc`、esbuild 构建与 supply-chain guard 通过；真实 pi / omp 在隔离 agent 目录中完成双 provider 注册冒烟验证
+
+### 修复（代码审查后续）
+
+- `fallbackModels[].baseUrl` 补 HTTPS 强制校验：模型级 baseUrl 覆盖实例网关地址且 authHeader 仍携带 JWT，明文风险与实例 URL 同级
+- loopback 判定改用 `net.isIP` 确认 IPv4 字面量后再判 127.0.0.0/8：`127.evil.example.com` 是可注册域名，`startsWith("127.")` 会误放行
+- omp 以 `#!/usr/bin/env bun` 脚本分发，bun 宿主下 execPath 无法判定宿主 CLI——bun 及未知 execPath 统一按 pi → omp 顺序探测两个默认路径并告警（端到端验证 omp 仅存 omp 配置时可正确发现）
+- `compat` 从字段白名单改为浅层 JSON 值校验：pi 与 omp 两套运行时的 compat 字段集已经不同（omp 18.1.3 无 `forceAdaptiveThinking`），静态白名单会随框架版本脱节、拒绝合法配置
+- provider id 拒绝 `constructor` 等 Object.prototype 属性名（models-store 原型链读取会使 `structuredClone` 抛 `DataCloneError`）；内置 provider 保留名单扩为 pi 与 omp 两侧 registry 并集（含 `azure`、`meta`、`litellm`、`typesafe` 等）
 
 ## [0.10.1] - 2026-09-27
 
