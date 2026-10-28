@@ -7,9 +7,12 @@ Pi coding agent 通过 Keycloak OIDC 免配置（keyless）接入 LiteLLM 网关
 ## 架构
 
 ```
-pi agent
+pi / omp
   │
-  │ /login <provider> ──→ oauth.login(callbacks)
+  │ LITELLM_OIDC_*（单实例）或 litellm-oidc.json（instances[]）
+  │    └─ loadRuntimeConfig → 每个 Instance 独立 registerProvider
+  │
+  │ /login <provider> ──→ 该实例的 oauth.login(callbacks)
   │    1. POST {keycloak}/realms/{realm}/protocol/openid-connect/auth/device
   │       (公共客户端, scope="openid profile email offline_access")
   │    2. 展示设备码——按回调能力三级探测：
@@ -17,13 +20,14 @@ pi agent
   │       onAuth()       → omp LoginDialog（verificationUri + userCode）
   │       notify()       → 未来 AuthInteraction 通道（自动生效）
   │    3. 轮询 token endpoint（grant_type=urn:ietf:params:oauth:grant-type:device_code）
-  │    4. 返回 {access, refresh, expires}，Pi 持久化到 ~/.pi/agent/auth.json
+  │    4. 返回 {access, refresh, expires}，框架按 provider 持久化：
+  │       pi → ~/.pi/agent/auth.json；omp → auth_credentials 表
   │
-  │ 请求时（Pi 框架管理）：
-  │    - access token 临过期（5min 窗口）→ oauth.refreshToken() → Keycloak refresh_token grant
+  │ 请求时（框架按 provider 管理）：
+  │    - access token 临过期（5min 窗口）→ 该实例 oauth.refreshToken() → Keycloak refresh_token grant
   │    - authHeader: true → Authorization: Bearer <JWT>
   ▼
-LiteLLM 网关 (enable_jwt_auth + JWKS 指向 Keycloak，网关侧零改动)
+各实例自己的 LiteLLM 网关 (enable_jwt_auth + JWKS 指向对应 Keycloak)
   └─ /v1/messages（api: "anthropic-messages"）
 ```
 
@@ -44,7 +48,7 @@ echo registry=https://registry.npmjs.org/ >> ~/.npmrc
 pi install npm:pi-provider-litellm-oidc
 
 # git 源（注意 scp 简写必须带 git@，否则 Pi 会当作本地路径）
-pi install git:git@github.com/jesset/pi-provider-litellm-oidc.git@v0.5.1
+pi install git:git@github.com/jesset/pi-provider-litellm-oidc.git@v0.11.0
 
 # 本地路径（开发/单机）
 cd pi-provider-litellm-oidc && ./install.sh
@@ -62,7 +66,7 @@ env npm_config_registry=https://registry.npmjs.org/ \
   omp install npm:pi-provider-litellm-oidc
 ```
 
-> omp（oh-my-pi）是 pi 的 compiled binary 发行版，内置 legacy 插件兼容 shim，
+> omp（oh-my-pi）以 Bun 脚本分发（`#!/usr/bin/env bun`），内置 legacy 插件兼容 shim，
 > 自动把 `@earendil-works/pi-*` 导入重写为其内置 `@oh-my-pi/pi-*` 包。本扩展
 > 已适配两套运行时的 OAuth 回调差异（见下文"双运行时兼容"）。
 
@@ -80,10 +84,16 @@ env npm_config_registry=https://registry.npmjs.org/ \
 ## 使用
 
 ```text
-/login litellm              # Keycloak Device Flow 登录（任意设备浏览器完成验证）
+/login litellm              # 登录默认实例（Device Flow 在任意设备浏览器完成）
 /model litellm/kimi-k2.7-code
-/logout litellm             # 清除凭据
-/session-header              # 查看各实例登录状态与 session / customer 注入
+/logout litellm             # 只清除该实例凭据
+
+# 配置 instances[] 后，每个实例有独立的登录、模型与凭据命名空间
+/login staging
+/model staging/<model-id>
+/logout staging                 # 不影响 litellm
+
+/session-header              # 查看配置来源、各实例登录状态与 session / customer 注入
 ```
 
 ## 配置
@@ -106,7 +116,7 @@ env npm_config_registry=https://registry.npmjs.org/ \
 
 环境变量写法：`~/.pi/agent/settings.json` 的 `env` 块、shell profile、或启动时 `LITELLM_OIDC_...=... pi`。
 
-> **HTTPS 强制（v0.10.0 起）**：环境变量的 `LITELLM_OIDC_GATEWAY_URL` / `LITELLM_OIDC_KEYCLOAK_URL`，以及配置文件的 `gatewayUrl` / `keycloakUrl` 必须使用 `https://`——误配 `http://` 会让 JWT 与 refresh token 明文过线，扩展在加载时直接报错（fail-fast）；唯一例外是 loopback 主机（`localhost` / `127.x` / `[::1]`，本地调试代理）。
+> **HTTPS 强制（v0.10.0 起）**：环境变量的 `LITELLM_OIDC_GATEWAY_URL` / `LITELLM_OIDC_KEYCLOAK_URL`，以及配置文件的 `gatewayUrl` / `keycloakUrl` / `fallbackModels[].baseUrl` 必须使用 `https://`——误配 `http://` 会让 JWT 与 refresh token 明文过线，扩展在加载时直接报错（fail-fast）；唯一例外是 loopback 主机（`localhost`、IPv4 字面量 `127.0.0.0/8`、`[::1]`，本地调试代理；`127.*` 域名不属于例外）。
 >
 > **refresh 瞬态失败 backoff（v0.10.0 起）**：Keycloak 瞬断/限流时，Pi credential lock 后排队的刷新调用会形成惊群（每次都再打 token endpoint）。扩展按实例与 refresh token 记录 5s backoff 窗口，窗口内直接返回未过期的旧凭据；仅瞬态异常（网络/解析层）记录 backoff，OAuth 语义错误（如 `invalid_grant`）照常抛出强制重新 `/login`，旧 token 已过期时不 backoff（立即重试）。
 
@@ -118,10 +128,10 @@ env npm_config_registry=https://registry.npmjs.org/ \
 
 1. `LITELLM_OIDC_CONFIG=/path/to/litellm-oidc.json`（相对路径按当前工作目录解析）；
 2. `$PI_CODING_AGENT_DIR/litellm-oidc.json`；
-3. 运行时默认路径：pi 为 `~/.pi/agent/litellm-oidc.json`；omp 按 `PI_CONFIG_DIR` 与 `OMP_PROFILE` / `PI_PROFILE` 推导，默认为 `~/.omp/agent/litellm-oidc.json`。宿主无法从 `process.execPath` 确定（omp 以 `#!/usr/bin/env bun` 脚本分发，bun 下 execPath 是 bun 本身）时，按 pi → omp 顺序探测两个默认路径并输出一条告警；
+3. 运行时默认路径：pi 为 `~/.pi/agent/litellm-oidc.json`；omp 按 `PI_CONFIG_DIR` 与 `OMP_PROFILE` / `PI_PROFILE` 推导，默认为 `~/.omp/agent/litellm-oidc.json`。`execPath` 为 `omp` 时只查 omp 路径，为 `pi` / `node` 时只查 pi 路径；omp 以 `#!/usr/bin/env bun` 脚本分发，bun 或其他无法判定宿主的 execPath 则按 pi → omp 顺序探测并输出一条告警；
 4. 均未发现时回退到环境变量单实例。
 
-显式路径不存在、JSON 非法或任一实例字段错误都会使扩展加载失败，不会静默回退。修改文件后执行 `/reload` 生效。
+显式路径不存在、JSON 非法或任一实例字段错误都会使扩展加载失败，不会静默回退。修改文件后执行 `/reload` 生效。若 pi 与 omp 的默认路径同时存在配置，bun 宿主下按上述顺序取第一个命中项；需要消除歧义时，显式设置 `LITELLM_OIDC_CONFIG` 或 `PI_CODING_AGENT_DIR`。
 
 ```json
 {
@@ -158,13 +168,20 @@ env npm_config_registry=https://registry.npmjs.org/ \
         }
       ]
     }
-  ]
+  ],
+  "session": { "header": "x-litellm-trace-id", "prefix": "pi-" },
+  "customer": { "header": "x-litellm-customer-id", "claims": ["email"] },
+  "cost": { "enabled": true, "header": "x-litellm-response-cost" }
 }
 ```
 
 实例必填字段：`id`、`name`、`gatewayUrl`、`keycloakUrl`、`realm`、`clientId`。`scope` 默认 `openid profile email offline_access`，`modelInfoPath` 默认 `/model/info`。`id` 必须全局唯一、使用小写字母/数字开头且不能含 `/`，不能是 `constructor` 等保留属性名，也不能覆盖 pi / omp 内置 provider（保留名单为两侧框架 registry 的并集）。
 
-文件实例的 `fallbackModels` 默认空数组，**不会继承 LiteLLM 内置 11 模型**。网关 `/model/info` 不可用时，如需离线静态目录，必须按完整 `ProviderModelConfig` 显式声明；legacy 环境变量单实例仍保留内置目录。顶层还可选 `session`、`customer`、`cost` 块，用于覆盖对应的全局环境变量；实例内仅 `customer` 可继续覆盖，`session` 与 `cost` 保持全局。
+从环境变量迁移到文件时，原默认实例也必须列入 `instances[]`，否则不会保留。各实例的凭据与模型目录按 `id` 隔离：pi 分别存入 `~/.pi/agent/auth.json` 与 `~/.pi/agent/models-store.json` 的对应 provider 键；omp 分别存入 `auth_credentials` 表与 `models.db` 的对应 provider 作用域。
+
+文件实例的 `fallbackModels` 默认空数组，**不会继承 LiteLLM 内置 11 模型**。网关 `/model/info` 不可用时，如需离线静态目录，必须按完整 `ProviderModelConfig` 显式声明；legacy 环境变量单实例仍保留内置目录。`fallbackModels[].baseUrl` 会覆盖该模型的请求地址，同样必须通过 HTTPS 校验。`compat` 的字段与枚举由运行时框架定义，扩展只做浅层 JSON 值校验，未识别字段可能被框架忽略。
+
+顶层可选 `session`、`customer`、`cost` 块用于覆盖对应的全局环境变量：`session` 支持 `header` / `prefix` / `clientHeader`，`customer` 支持 `header` / `claims`，`cost` 支持 `enabled` / `header`。实例内仅 `customer` 可继续覆盖，`session` 与 `cost` 保持全局。
 
 ## Session / Customer 标识注入（网关聚合与用户归因）
 
@@ -181,6 +198,8 @@ env npm_config_registry=https://registry.npmjs.org/ \
    - **模型级呑底**：`oauth.modifyModels` 在框架每次取模型目录时用当前 credential 把 customer 头写进每个 model.headers，这样**绕过会话钩子**的调用（如 `pi-observational-memory` 的观察/反思/压缩用裸 `pi-ai/compat` streamSimple 直接调 LLM）经 pi-ai createClient 合并 `model.headers` 也同样携带。session 头仍只走钩子通道（session id 是会话级概念，不属于模型）。落盘的 models-store 只存原始目录、不含用户标识。
 
    > 排错提示：网关 SpendLogs 里那些 session_id 是随机 uuid、且单请求的“神秘 session”，多来自这类绕过钩子的后台调用（OM 压缩、第三方 SDK 客户端等无 trace 头，LiteLLM 会自动生成 uuid 作 session_id）；本扩展的 customer 头现已覆盖到 OM 这类调用，但无 trace 头的请求仍不会有真实会话关联。
+
+以下环境变量在 legacy 与配置文件模式下都生效；文件顶层的 `session` / `customer` 块可覆盖它们，实例内的 `customer` 还可按实例再覆盖。
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
@@ -220,7 +239,7 @@ env npm_config_registry=https://registry.npmjs.org/ \
 ## 模型列表策略
 
 - 启动时注册静态兜底目录：legacy 环境变量单实例为内置 11 个常用 chat 模型；配置文件实例使用各自的 `fallbackModels`（缺省为空）
-- 网络刷新成功的目录经 `context.publish({ persist })` 持久化到 `~/.pi/agent/models-store.json`，之后离线启动直接恢复真实目录，不再请求网关
+- 网络刷新成功的目录经 `context.publish({ persist })` 按 provider 持久化：pi 写入 `~/.pi/agent/models-store.json`，omp 写入 `models.db`；之后离线启动直接恢复各实例的真实目录，不再请求网关
 - `refreshModels` 遵守框架两阶段刷新协议：`allowNetwork=false`（扩展注册、每次 refresh 的 phase 1）零网络请求；网络阶段从 `context.credential` 取已刷新的 access token 调 `/model/info`（尊重框架 abort signal 与本地 15s 超时）
 - 数据源用 `/model/info` 而非 `/v1/models`：前者返回 deployment 级 DB 实配值（token limits、`supports_vision`、mode），后者的这些字段来自 LiteLLM 静态 cost map 按公开模型名查找——自研/别名模型（如 `kimi-k2.7-code`）一律缺失，会被误滤掉。要求网关把 `/model/info` 列入 `public_routes`（用户 JWT 可访问）
 - 过滤规则：剔除 `mode` 显式为 embedding/rerank/image_generation 的条目（mode 缺失是自研模型常态，不据此排除）；隐藏 `staging/` 前缀（网关内部命名空间）与 `-openai` 后缀（OpenAI 协议腿孪生，与 anthropic 腿重复）的内部条目；同名多 deployment 聚合为一条（token 上限等标量字段取首个非空值，成本字段取 max 保守上界）
@@ -233,13 +252,13 @@ env npm_config_registry=https://registry.npmjs.org/ \
 ## 验证行为说明
 
 - 未登录时 `pi --list-models` **不会显示**本 provider 的模型——Pi 只列出已通过认证检查的 provider 的模型（`getAvailable` 按 auth 过滤），这是 Pi 的设计，不是扩展缺陷
-- 未登录直接 `--model litellm/<id>` 会报 "No API key found for litellm. Use /login"，即证明 provider 注册成功
+- 未登录直接 `--model litellm/<id>` 会报 "No API key found for litellm. Use /login"，即证明 provider 注册成功；多实例可分别用 `--model <instance-id>/<model-id>` 做同样验证
 - 完整验证顺序：`/login` → `/model` → 发消息 → 模型出现在列表
 
 ## 环境要求
 
 - Pi ≥ 0.81.0（0.84.x 捆绑的 undici 需要 Node ≥ 22；系统默认 node 为 20 时需用 node@22 wrapper 启动 pi）
-- omp（oh-my-pi）≥ 17.0（compiled binary，无外部 Node 依赖；内置 legacy 插件兼容 shim 自动重写 `@earendil-works/pi-*` 导入到 `@oh-my-pi/pi-*`）
+- omp（oh-my-pi）≥ 17.0（以 `#!/usr/bin/env bun` 脚本分发，需 Bun，无 Node 依赖；内置 legacy 插件兼容 shim 自动重写 `@earendil-works/pi-*` 导入到 `@oh-my-pi/pi-*`）
 - 网络可达 Keycloak 与 LiteLLM 网关
 
 ## 双运行时兼容（pi / omp）
