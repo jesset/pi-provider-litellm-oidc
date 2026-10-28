@@ -239,7 +239,10 @@ function aggregateCost(cost: CostAggregate, info: NonNullable<Pick<LiteLLMDeploy
 
 const ZERO_COST: CostAggregate = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
-export function transformModelInfo(data: LiteLLMDeploymentEntry[] | undefined): ProviderModelConfig[] | null {
+export function transformModelInfo(
+  data: LiteLLMDeploymentEntry[] | undefined,
+  options?: { imageClassifiers?: string[] },
+): ProviderModelConfig[] | null {
   const merged = new Map<
     string,
     {
@@ -258,7 +261,7 @@ export function transformModelInfo(data: LiteLLMDeploymentEntry[] | undefined): 
   // decisions 桶（同名聚合取首个非空 token 上限）。同名跨桶（如同名 chat+image 部署）
   // 在实际 LiteLLM 配置中不存在；若出现则各自成条，行为可解释。
   const imageAgg = new Map<string, { edit: boolean; cost: CostAggregate }>();
-  const decisionAgg = new Map<string, { maxInput?: number; cost: CostAggregate }>();
+  const decisionAgg = new Map<string, { maxInput?: number; vision: boolean; sawVisionFalse: boolean; cost: CostAggregate }>();
   for (const entry of data ?? []) {
     const name = entry.model_name;
     if (!name || HIDDEN_NAME_PATTERN.test(name)) continue;
@@ -272,8 +275,12 @@ export function transformModelInfo(data: LiteLLMDeploymentEntry[] | undefined): 
       continue;
     }
     if (mode && DECISION_MODES.has(mode)) {
-      const agg = decisionAgg.get(name) ?? { cost: { ...ZERO_COST } };
+      const agg = decisionAgg.get(name) ?? { vision: true, sawVisionFalse: false, cost: { ...ZERO_COST } };
       agg.maxInput ??= info.max_input_tokens ?? undefined;
+      // 图像能力：网关 supports_vision all-true 聚合优先（显式 false 一票否决，声明权威）；
+      // 名单兑底仅在无任何显式 false 时生效（错误宣传的代价是 assets 静默剥离后错答）
+      if (info.supports_vision === false) agg.sawVisionFalse = true;
+      agg.vision = agg.vision && info.supports_vision === true;
       aggregateCost(agg.cost, info);
       decisionAgg.set(name, agg);
       continue;
@@ -397,7 +404,9 @@ export function transformModelInfo(data: LiteLLMDeploymentEntry[] | undefined): 
     id,
     name: id,
     api: "litellm-decisions",
-    input: ["text"] as const,
+    input: (agg.vision || (!agg.sawVisionFalse && (options?.imageClassifiers ?? []).includes(id)))
+      ? (["text", "image"] as const)
+      : (["text"] as const),
     contextWindow: agg.maxInput ?? 65536,
     cost: agg.cost,
   }));
@@ -440,7 +449,7 @@ export async function fetchGatewayModels(instance: InstanceConfig, bearerToken: 
     if (!response.ok) return null;
 
     const payload = (await response.json()) as { data?: LiteLLMDeploymentEntry[] };
-    return transformModelInfo(payload.data);
+    return transformModelInfo(payload.data, { imageClassifiers: instance.imageClassifiers });
   } catch {
     return null;
   }

@@ -246,7 +246,7 @@ env npm_config_registry=https://registry.npmjs.org/ \
   for (const b of r.output) if (b.type === "image") image(b);
   ```
 
-- **结构化决策**（mode `decisions` / `evaluation`，同义）：产出 pi classifier 模型条目，System One wire 调 `POST /v1/systemone`（bool↔noul 双向映射，answers 按 name keyed，usage token 回填并计入会话成本）。agent 经 codemode `models.classify()` 提 choice/score/bool 三型问题拿概率化答案，适合批量路由/打标/过滤：
+- **结构化决策**（mode `decisions` / `evaluation`，同义）：产出 pi classifier 模型条目，System One wire 调 `POST /v1/systemone`（bool↔noul 双向映射，answers 按 name keyed，usage token 回填并计入会话成本）。agent 经 codemode `models.classify()` 提 choice/score/bool 三型问题拿概率化答案，适合批量路由/打标/过滤。**图像输入**：条目 `input` 含 `"image"` 时可传 `images`（assets 形态：引用名前置到 state、PNG/JPEG 白名单、opt-in 头必发——网关会静默剥离无头请求的图像并返回错误答案）；图像能力由网关 `supports_vision` 声明驱动（同名组 all-true，显式 false 一票否决），网关未声明时可经实例级 `imageClassifiers: ["<model_name>"]` 名单兜底。注意 TypeSafe 上游图像尺寸下限约 320px：
 
   ```js
   const judge = await models.getModelOfType("classifier", "litellm", "typesafe/jev-latest");

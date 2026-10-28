@@ -18,6 +18,13 @@ import type { InstanceConfig } from "./config.ts";
  *   answers 比数组序防错；LiteLLM 对两种格式双向翻译，格式选择不影响模型可用性。
  * - 认证：不自取 token，以框架注入的 options.apiKey（OIDC access）加 Bearer；customer
  *   头经 modifyModels stamp 的 model.headers 兜底通道由框架 mergeHeaders 生效。
+ * - 图像输入（条目 input 含 "image" 时）：System One assets 形态——state 变数组
+ *   （`<image-N>` 引用在前 + 原 state）、assets map（PNG/JPEG 白名单，TypeSafe
+ *   上游限制）、`TypeSafe-Danger-Zone-Images: true` opt-in 头（必须随图发送：网关
+ *   drop_params 对无头请求静默剥离 assets，返回自信的错误答案——实测；
+ *   配方与 pi 内置 system-one-shared 的 assets 分支同构，jev-1.14.0
+ *   512×512 实测 noul 判色正确、图像 token 计入 usage）。图像能力由网关
+ *   supports_vision 声明驱动（all-true 聚合），未声明不宣传。
  * - 错误不 throw：一律按 ClassifierResult 形状返回（codemode 契约检查 stopReason）。
  * - usage 按 input_tokens/output_tokens 回填，cost 按 model.cost per-million 单位计算
  *   （pi catalog 惯例，openrouter-images 同款）；目录条目 cost 已在 transformModelInfo
@@ -108,7 +115,39 @@ function parseUsage(raw: unknown, model: Pick<ClassifierModel<"litellm-decisions
   };
 }
 
-/** 为一个实例构造 classifier 实现（URL 闭包自实例网关配置，与 fetchGatewayModels 同源）。 */
+/** assets 形态的图像格式白名单（TypeSafe 上游仅接受 PNG/JPEG；mimeType → wire format）。 */
+const ASSET_FORMATS: Record<string, string> = { "image/png": "png", "image/jpeg": "jpeg" };
+
+/** pi 侧 images（bool）→ wire questions（noul）；带图时 state 变数组、assets 附引用。 */
+function wireRequest(context: ClassifierContext): {
+  state: unknown;
+  questions: Record<string, unknown>;
+  assets?: Record<string, { type: string; format: string; data_base64: string }>;
+} {
+  const questions = Object.fromEntries(
+    Object.entries(context.questions).map(([id, question]) => [
+      id,
+      question.type === "bool" ? { ...question, type: "noul" } : question,
+    ]),
+  );
+  const images = context.images ?? [];
+  if (images.length === 0) return { state: context.state, questions };
+  const assets: Record<string, { type: string; format: string; data_base64: string }> = {};
+  const refs: string[] = [];
+  images.forEach((image, index) => {
+    const format = ASSET_FORMATS[image.mimeType];
+    if (!format) {
+      throw new Error(
+        `litellm-decisions: assets 形态仅接受 PNG/JPEG 图像（TypeSafe 上游限制），得到 ${image.mimeType}`,
+      );
+    }
+    const ref = `<image-${index + 1}>`;
+    refs.push(ref);
+    assets[ref] = { type: "image", format, data_base64: image.data };
+  });
+  // 每个资产必须被引用：引用名放在 state 前（pi 内置同款，与 Clef 的图像位置一致）
+  return { state: [...refs, context.state], questions, assets };
+}
 export function createDecisionsClassifier(
   instance: Pick<InstanceConfig, "gatewayBaseUrl">,
 ): ProviderClassifier {
@@ -132,22 +171,29 @@ export function createDecisionsClassifier(
           throw new Error(`No API key for provider: ${model.provider}`);
         }
         if (context.images?.length) {
-          throw new Error("litellm-decisions: System One 通道不支持图像输入");
+          if (!model.input.includes("image")) {
+            throw new Error("litellm-decisions: 该条目未声明图像输入（网关 supports_vision 未声明 true）");
+          }
         }
-        // pi questions（bool）→ wire questions（noul）
-        const questions = Object.fromEntries(
-          Object.entries(context.questions).map(([id, question]) => [
-            id,
-            question.type === "bool" ? { ...question, type: "noul" } : question,
-          ]),
-        );
+        const wired = wireRequest(context);
+        const headers: Record<string, string> = {
+          "content-type": "application/json",
+          authorization: `Bearer ${apiKey}`,
+        };
+        if (wired.assets) {
+          // opt-in 头必须随 assets 发送：无头时网关 drop_params 静默剥离图像，
+          // 返回 200 与自信的错误答案（实测，风险最高失败模式）
+          headers["typesafe-danger-zone-images"] = "true";
+        }
         const response = await fetch(`${baseUrl}/systemone`, {
           method: "POST",
-          headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({ model: model.id, state: context.state, questions }),
+          headers,
+          body: JSON.stringify({
+            model: model.id,
+            state: wired.state,
+            questions: wired.questions,
+            ...(wired.assets ? { assets: wired.assets } : {}),
+          }),
           signal: options?.signal,
         });
         if (!response.ok) {

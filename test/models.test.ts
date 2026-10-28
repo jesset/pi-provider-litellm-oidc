@@ -53,6 +53,56 @@ describe("transformModelInfo — 现有行为锁定", () => {
     expect(byId["jev-c"]).toMatchObject({ type: "classifier", contextWindow: 65536 });
   });
 
+  it("decisions 条目的图像能力：网关声明 supports_vision===true 才宣传 image 输入", () => {
+    const models = transformModelInfo([
+      { model_name: "jev-vision", model_info: { mode: "evaluation", supports_vision: true } },
+      { model_name: "jev-text", model_info: { mode: "evaluation", supports_vision: false } },
+      { model_name: "jev-silent", model_info: { mode: "decisions" } },
+    ]);
+    const byId = Object.fromEntries((models ?? []).map((m) => [m.id, m]));
+    expect(byId["jev-vision"].input).toEqual(["text", "image"]);
+    expect(byId["jev-text"].input).toEqual(["text"]);
+    // 未声明 = 不宣传（与 chat 条目 vision 默认同精神）
+    expect(byId["jev-silent"].input).toEqual(["text"]);
+  });
+
+  it("decisions 同名组图像能力 all-true 聚合（任一 deployment 未显式 true 即不宣传）", () => {
+    const models = transformModelInfo([
+      { model_name: "jev-mixed", model_info: { mode: "evaluation", supports_vision: true } },
+      { model_name: "jev-mixed", model_info: { mode: "evaluation" } },
+      { model_name: "jev-all", model_info: { mode: "evaluation", supports_vision: true } },
+      { model_name: "jev-all", model_info: { mode: "decisions", supports_vision: true } },
+    ]);
+    const byId = Object.fromEntries((models ?? []).map((m) => [m.id, m]));
+    expect(byId["jev-mixed"].input).toEqual(["text"]);
+    expect(byId["jev-all"].input).toEqual(["text", "image"]);
+  });
+
+  it("imageClassifiers 名单兑底：网关未声明但名单命中 → 仍宣传图像输入", () => {
+    const models = transformModelInfo(
+      [{ model_name: "my-jev", model_info: { mode: "evaluation" } }],
+      { imageClassifiers: ["my-jev"] },
+    );
+    expect(models?.[0].input).toEqual(["text", "image"]);
+    // 名单外不受影响
+    const other = transformModelInfo(
+      [
+        { model_name: "my-jev", model_info: { mode: "evaluation" } },
+        { model_name: "other-jev", model_info: { mode: "evaluation" } },
+      ],
+      { imageClassifiers: ["my-jev"] },
+    );
+    const byId = Object.fromEntries((other ?? []).map((m) => [m.id, m]));
+    expect(byId["my-jev"].input).toEqual(["text", "image"]);
+    expect(byId["other-jev"].input).toEqual(["text"]);
+    // 显式 false 一票否决优先于名单（声明权威）
+    const veto = transformModelInfo(
+      [{ model_name: "my-jev", model_info: { mode: "evaluation", supports_vision: false } }],
+      { imageClassifiers: ["my-jev"] },
+    );
+    expect(veto?.[0].input).toEqual(["text"]);
+  });
+
   it("未知 mode 值不剔除（与 mode 缺失同精神，不误杀新模态/自研别名）", () => {
     const models = transformModelInfo([
       { model_name: "mystery", model_info: { mode: "some_future_mode" } },

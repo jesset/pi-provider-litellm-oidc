@@ -228,6 +228,61 @@ describe("litellm-decisions.classify — System One wire（真实报文 fixture�
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("图像");
   });
+
+  it("images 输入（条目声明 image）：state 变数组（引用在前）、assets map、opt-in 头（实测配方）", async () => {
+    const { pi, providers } = fakePi();
+    setupExtension(pi, runtimeConfig());
+    const classify = getClassifierImpl(providers);
+
+    const fetchMock = mockFetch((url) =>
+      url.endsWith("/systemone")
+        ? new Response(JSON.stringify(SYSTEMONE_RESPONSE), { status: 200 })
+        : new Response("not found", { status: 404 })
+    );
+    try {
+      const png = btoa("fake-png");
+      const jpeg = btoa("fake-jpeg");
+      const result = await classify(
+        { ...classifierModel(), input: ["text", "image"] } as any,
+        {
+          ...CONTEXT,
+          images: [
+            { type: "image", data: png, mimeType: "image/png" },
+            { type: "image", data: jpeg, mimeType: "image/jpeg" },
+          ],
+        },
+        { apiKey: "oidc-token", signal: new AbortController().signal } as any,
+      );
+
+      const req = fetchMock.requests[0];
+      // opt-in 头必须随图发送：网关 drop_params 会静默剥离无头请求的 assets（返回自信的错误答案）
+      expect((req.init?.headers as Record<string, string>)["typesafe-danger-zone-images"]).toBe("true");
+      const body = JSON.parse(String(req.init?.body));
+      expect(body.state).toEqual(["<image-1>", "<image-2>", CONTEXT.state]);
+      expect(body.assets).toEqual({
+        "<image-1>": { type: "image", format: "png", data_base64: png },
+        "<image-2>": { type: "image", format: "jpeg", data_base64: jpeg },
+      });
+      expect(result.stopReason).toBe("stop");
+      expect(result.answers.is_refund).toEqual({ type: "bool", probability: 0.99 });
+    } finally {
+      fetchMock.restore();
+    }
+  });
+
+  it("assets 形态仅接受 PNG/JPEG（WebP 报错，TypeSafe 上游限制）", async () => {
+    const { pi, providers } = fakePi();
+    setupExtension(pi, runtimeConfig());
+    const classify = getClassifierImpl(providers);
+
+    const result = await classify(
+      { ...classifierModel(), input: ["text", "image"] } as any,
+      { ...CONTEXT, images: [{ type: "image", data: "AAAA", mimeType: "image/webp" }] },
+      { apiKey: "t", signal: new AbortController().signal } as any,
+    );
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("PNG/JPEG");
+  });
 });
 
 /** /v1/images/generations 实测响应骨架（flux3-klein，2026-10-28）。 */
