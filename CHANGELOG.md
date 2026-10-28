@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-28
+
 ### 新增
 
 - **非 chat 模态接入（image_generation / image_edit / decisions）**：`/model/info` 的 deployment mode 数据驱动分流——图像类 mode 产出 pi `type:"image"` 模型条目（同名 generation+edit 聚合，edit 部署声明图像输入）、`decisions`/`evaluation`（同义 mode）产出 `type:"classifier"` 条目，其余非 chat mode 照旧剔除。配套两个 API 实现：`litellm-images`（generateImages，按输入分流 `/v1/images/generations` JSON 与 `/v1/images/edits` multipart，b64_json 直出 + url 回落下载，size/n/quality 经 `options.metadata` 透传）与 `litellm-decisions`（classify，System One wire 调 `/v1/systemone`，bool↔noul 双向映射，usage 回填；目录条目 cost 同步由网关 per-token 字段换算为 pi ModelCost 的 per-million 单位，使 classify 的会话成本核算真实可用——此前 chat 条目直接透传 per-token 值，单位错位 1e6 倍）。两实现共用实例 OIDC 凭证（框架注入 `options.apiKey`），错误不 throw。codemode 经 `models.getModelOfType("image"/"classifier")` + `generateImages()`/`classify()` 调用；`/session-header` 新增各实例模态清单。**decisions 条目图像输入（assets 形态）**：网关 `supports_vision` all-true 聚合（显式 false 一票否决，声明权威）+ 实例级 `imageClassifiers` 名单兜底；classify 带图时 state 变数组（`<image-N>` 引用在前）、assets map（PNG/JPEG 白名单）、`TypeSafe-Danger-Zone-Images: true` opt-in 头（必须随图发送——网关 drop_params 对无头请求静默剥离 assets 并返回自信的错误答案，实测）。embedding/rerank/audio/ocr/video/realtime 等模态 pi 无对应 ModelType，维持剔除（spec: issue #1）
