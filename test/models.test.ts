@@ -25,15 +25,90 @@ describe("transformModelInfo — 现有行为锁定", () => {
     expect(ids).toEqual(["claude-sonnet-5"]);
   });
 
-  it("过滤 embedding / rerank / image_generation 模式", () => {
+  it("过滤 embedding / rerank 等无通道模式；image_generation 分流为 image 条目（spec #1）", () => {
     const models = transformModelInfo([
       { model_name: "text-embed-v1", model_info: { mode: "embedding" } },
       { model_name: "rerank-v1", model_info: { mode: "rerank" } },
+      { model_name: "whisper-v3", model_info: { mode: "audio_transcription" } },
       { model_name: "img-gen", model_info: { mode: "image_generation" } },
       { model_name: "claude-sonnet-5", model_info: { mode: "chat" } },
     ]);
-    const ids = (models ?? []).map((m) => m.id);
-    expect(ids).toEqual(["claude-sonnet-5"]);
+    const byId = Object.fromEntries((models ?? []).map((m) => [m.id, m]));
+    expect(byId["text-embed-v1"]).toBeUndefined();
+    expect(byId["rerank-v1"]).toBeUndefined();
+    expect(byId["whisper-v3"]).toBeUndefined();
+    expect(byId["img-gen"]).toMatchObject({ type: "image", api: "litellm-images" });
+    expect(byId["claude-sonnet-5"]?.type).toBeUndefined();
+  });
+
+  it("decisions / evaluation 双 mode 都分流为 classifier 条目（spec #1）", () => {
+    const models = transformModelInfo([
+      { model_name: "jev-a", model_info: { mode: "decisions" } },
+      { model_name: "jev-b", model_info: { mode: "evaluation", max_input_tokens: 65536 } },
+      { model_name: "jev-c", model_info: { mode: "evaluation" } },
+    ]);
+    const byId = Object.fromEntries((models ?? []).map((m) => [m.id, m]));
+    expect(byId["jev-a"]).toMatchObject({ type: "classifier", api: "litellm-decisions", contextWindow: 65536 });
+    expect(byId["jev-b"]).toMatchObject({ type: "classifier", contextWindow: 65536 });
+    expect(byId["jev-c"]).toMatchObject({ type: "classifier", contextWindow: 65536 });
+  });
+
+  it("decisions 条目的图像能力：网关声明 supports_vision===true 才宣传 image 输入", () => {
+    const models = transformModelInfo([
+      { model_name: "jev-vision", model_info: { mode: "evaluation", supports_vision: true } },
+      { model_name: "jev-text", model_info: { mode: "evaluation", supports_vision: false } },
+      { model_name: "jev-silent", model_info: { mode: "decisions" } },
+    ]);
+    const byId = Object.fromEntries((models ?? []).map((m) => [m.id, m]));
+    expect(byId["jev-vision"].input).toEqual(["text", "image"]);
+    expect(byId["jev-text"].input).toEqual(["text"]);
+    // 未声明 = 不宣传（与 chat 条目 vision 默认同精神）
+    expect(byId["jev-silent"].input).toEqual(["text"]);
+  });
+
+  it("decisions 同名组图像能力 all-true 聚合（任一 deployment 未显式 true 即不宣传）", () => {
+    const models = transformModelInfo([
+      { model_name: "jev-mixed", model_info: { mode: "evaluation", supports_vision: true } },
+      { model_name: "jev-mixed", model_info: { mode: "evaluation" } },
+      { model_name: "jev-all", model_info: { mode: "evaluation", supports_vision: true } },
+      { model_name: "jev-all", model_info: { mode: "decisions", supports_vision: true } },
+    ]);
+    const byId = Object.fromEntries((models ?? []).map((m) => [m.id, m]));
+    expect(byId["jev-mixed"].input).toEqual(["text"]);
+    expect(byId["jev-all"].input).toEqual(["text", "image"]);
+  });
+
+  it("imageClassifiers 名单兑底：网关未声明但名单命中 → 仍宣传图像输入", () => {
+    const models = transformModelInfo(
+      [{ model_name: "my-jev", model_info: { mode: "evaluation" } }],
+      { imageClassifiers: ["my-jev"] },
+    );
+    expect(models?.[0].input).toEqual(["text", "image"]);
+    // 名单外不受影响
+    const other = transformModelInfo(
+      [
+        { model_name: "my-jev", model_info: { mode: "evaluation" } },
+        { model_name: "other-jev", model_info: { mode: "evaluation" } },
+      ],
+      { imageClassifiers: ["my-jev"] },
+    );
+    const byId = Object.fromEntries((other ?? []).map((m) => [m.id, m]));
+    expect(byId["my-jev"].input).toEqual(["text", "image"]);
+    expect(byId["other-jev"].input).toEqual(["text"]);
+    // 显式 false 一票否决优先于名单（声明权威）
+    const veto = transformModelInfo(
+      [{ model_name: "my-jev", model_info: { mode: "evaluation", supports_vision: false } }],
+      { imageClassifiers: ["my-jev"] },
+    );
+    expect(veto?.[0].input).toEqual(["text"]);
+  });
+
+  it("未知 mode 值不剔除（与 mode 缺失同精神，不误杀新模态/自研别名）", () => {
+    const models = transformModelInfo([
+      { model_name: "mystery", model_info: { mode: "some_future_mode" } },
+    ]);
+    expect((models ?? []).map((m) => m.id)).toEqual(["mystery"]);
+    expect((models ?? [])[0]?.type).toBeUndefined();
   });
 
   it("mode 缺失不排除（自研/别名模型常态）", () => {
@@ -519,7 +594,7 @@ describe("transformModelInfo — /model/info 成本字段", () => {
         },
       },
     ]);
-    expect(byId(models)["moonshotai/kimi-k3"].cost).toEqual({ input: 3e-6, output: 1.5e-5, cacheRead: 1e-6, cacheWrite: 5e-7 });
+    expect(byId(models)["moonshotai/kimi-k3"].cost).toEqual({ input: 3, output: 15, cacheRead: 1, cacheWrite: 0.5 });
   });
 
   it("成本字段缺失保持 0（防御默认：网关实测 z-ai/glm-5.3 缺 cacheWrite、kimi-k3 缺两个 cache 字段）", () => {
@@ -529,7 +604,8 @@ describe("transformModelInfo — /model/info 成本字段", () => {
         model_info: { input_cost_per_token: 1.4e-6, output_cost_per_token: 4.4e-6, cache_read_input_token_cost: 1.4e-6 },
       },
     ]);
-    expect(byId(models)["z-ai/glm-5.3"].cost).toEqual({ input: 1.4e-6, output: 4.4e-6, cacheRead: 1.4e-6, cacheWrite: 0 });
+    // 网关 per-token 值换算为 pi ModelCost 的 per-million 单位
+    expect(byId(models)["z-ai/glm-5.3"].cost).toEqual({ input: 1.4, output: 4.4, cacheRead: 1.4, cacheWrite: 0 });
   });
 
   it("同名多 deployment 成本按字段取 max（保守上界估算）", () => {
@@ -543,7 +619,7 @@ describe("transformModelInfo — /model/info 成本字段", () => {
         model_info: { input_cost_per_token: 3e-6, output_cost_per_token: 1e-6 },
       },
     ]);
-    expect(byId(models)["m"].cost).toEqual({ input: 3e-6, output: 2e-6, cacheRead: 0, cacheWrite: 0 });
+    expect(byId(models)["m"].cost).toEqual({ input: 3, output: 2, cacheRead: 0, cacheWrite: 0 });
   });
 });
 

@@ -55,3 +55,13 @@ _Avoid_: 模型清单（指能力声明时）
 **网关声明权威（gateway authority）**：
 模型能力以网关 model_info 为唯一权威，客户端不修补权威数据——网关误配直接反映到用户菜单。
 _Avoid_: 客户端纠错
+
+### 非 chat 模态
+
+**模态分流（mode routing）**：
+`/model/info` 的 deployment mode 到 pi ModelType 的映射：image_generation/image_edit → image、decisions/evaluation → classifier、名单内其余非 chat mode → 剔除。网关部署什么模态客户端即暴露什么。
+_Avoid_: 模型过滤（指 image/decisions 分流时）
+
+**System One wire**：
+`/v1/systemone` 端点的请求/响应格式（state + questions map，type ∈ noul/choice/score），pi 侧 bool 与 wire noul 双向映射。与 OpenAI Decisions 格式（/v1/decisions）由 LiteLLM 双向翻译，格式选择不影响模型可用性。
+_Avoid_: decisions 协议（指 System One 格式时）

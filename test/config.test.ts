@@ -247,6 +247,23 @@ describe("文件 schema 与归一化", () => {
     expect(config.cost).toEqual({ enabled: false, header: "x-cost" });
   });
 
+  it("imageClassifiers：string[] 名单透传，非数组/非字符串元素失败（decisions 图像能力的配置兑底通道）", () => {
+    const ok = parseConfigFile(
+      { instances: [{ ...instance(), imageClassifiers: ["typesafe/jev-latest", "my-jev"] }] },
+      "file:test",
+      {},
+    );
+    expect(ok.instances[0].imageClassifiers).toEqual(["typesafe/jev-latest", "my-jev"]);
+    // 缺省 undefined（不宣传）
+    expect(parseConfigFile({ instances: [instance()] }, "file:test", {}).instances[0].imageClassifiers).toBeUndefined();
+    expect(() =>
+      parseConfigFile({ instances: [{ ...instance(), imageClassifiers: "typesafe/jev-latest" }] }, "file:test", {}),
+    ).toThrow();
+    expect(() =>
+      parseConfigFile({ instances: [{ ...instance(), imageClassifiers: [42] }] }, "file:test", {}),
+    ).toThrow();
+  });
+
   it("fallbackModels 完整透传 ProviderModelConfig", () => {
     const model = {
       id: "claude-sonnet-5",

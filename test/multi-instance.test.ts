@@ -146,7 +146,7 @@ describe("多实例扩展装配", () => {
     }
   });
 
-  it("/session-header 汇总配置来源与各实例登录状态", async () => {
+  it("/session-header 汇总配置来源、各实例登录状态与模态清单（spec #1 用户故事 19）", async () => {
     const { pi, commands } = fakePi();
     setupExtension(pi, runtimeConfig());
     const notifications: string[] = [];
@@ -158,6 +158,12 @@ describe("多实例扩展装配", () => {
         getApiKeyForProvider: async (provider: string) => provider === "litellm"
           ? makeJwt({ email: "cloud@example.com" })
           : makeJwt({ preferred_username: "alice" }),
+        getModelsOfType: (type: string, provider: string) =>
+          provider === "litellm" && type === "image"
+            ? [{ id: "flux3-klein" }]
+            : provider === "litellm" && type === "classifier"
+              ? [{ id: "typesafe/jev-latest" }]
+              : [],
       },
     });
     expect(notifications).toHaveLength(1);
@@ -166,6 +172,12 @@ describe("多实例扩展装配", () => {
     expect(notifications[0]).toContain("cloud@example.com");
     expect(notifications[0]).toContain("[staging] Staging Gateway");
     expect(notifications[0]).toContain("x-staging-user: alice");
+    // 模态清单：litellm 有 1 image + 1 classifier，staging 均 0
+    expect(notifications[0]).toContain("image × 1");
+    expect(notifications[0]).toContain("classifier × 1");
+    const stagingSection = notifications[0].split("[staging]")[1];
+    expect(stagingSection).toContain("image × 0");
+    expect(stagingSection).toContain("classifier × 0");
   });
 
   it("refreshModels 两阶段：phase 1 零网络恢复各自 stored，网络阶段各自拉取并隔离持久化", async () => {

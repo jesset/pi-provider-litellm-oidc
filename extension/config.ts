@@ -30,6 +30,12 @@ export interface InstanceConfig {
   keycloakScope: string;
   modelInfoPath: string;
   customer: CustomerConfig;
+  /**
+   * decisions 模型图像能力的配置兑底：名单内的模型名（model_name）无条件宣传图像输入。
+   * 网关 supports_vision 声明优先（all-true 聚合），此名单用于网关未声明但后端实际
+   * 支持的场景（错误宣传的代价是 assets 被 drop_params 静默剥离后返回错误答案，慎用）。
+   */
+  imageClassifiers?: string[];
   /** undefined 仅在 legacy env 模式出现，表示沿用内置 LiteLLM 目录。 */
   fallbackModels?: ProviderModelConfig[];
 }
@@ -301,6 +307,15 @@ function fallbackModel(value: unknown, path: string): ProviderModelConfig {
   return value as ProviderModelConfig;
 }
 
+function imageClassifiersValue(value: unknown, path: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error(`${path} 必须是字符串数组`);
+  for (const item of value) {
+    if (typeof item !== "string" || !item.trim()) throw new Error(`${path} 的每一项必须是非空字符串`);
+  }
+  return value.slice();
+}
+
 function fallbackModelsValue(value: unknown, path: string): ProviderModelConfig[] {
   if (!Array.isArray(value)) throw new Error(`${path} 必须是数组`);
   return value.map((entry, index) => fallbackModel(entry, `${path}[${index}]`));
@@ -322,7 +337,7 @@ export function parseConfigFile(raw: unknown, source: string, env: NodeJS.Proces
     const entry = record(value, path);
     knownFields(
       entry,
-      ["id", "name", "gatewayUrl", "keycloakUrl", "realm", "clientId", "scope", "modelInfoPath", "customer", "fallbackModels"],
+      ["id", "name", "gatewayUrl", "keycloakUrl", "realm", "clientId", "scope", "modelInfoPath", "customer", "fallbackModels", "imageClassifiers"],
       path,
     );
     const providerId = requiredString(entry, "id", path);
@@ -357,6 +372,7 @@ export function parseConfigFile(raw: unknown, source: string, env: NodeJS.Proces
       keycloakScope: optionalString(entry, "scope", path, DEFAULT_SCOPE),
       modelInfoPath,
       customer: customerBlock(entry.customer, `${path}.customer`, customer),
+      imageClassifiers: imageClassifiersValue(entry.imageClassifiers, `${path}.imageClassifiers`),
       fallbackModels: entry.fallbackModels === undefined
         ? []
         : fallbackModelsValue(entry.fallbackModels, `${path}.fallbackModels`),
