@@ -71,7 +71,7 @@ const REASONING_PARAM_NAMES = new Set(["reasoning_effort", "thinking"]);
  *   medium 但 output_config.effort 覆盖（effort=max → reasoning_effort=max）；
  *   后端 reasoning_content 回译为 anthropic thinking 块（含流式 thinking_delta）。
  */
-const ADAPTIVE_THINKING: Pick<ProviderModelConfig, "thinkingLevelMap" | "compat"> = {
+const ADAPTIVE_THINKING: Pick<Extract<ProviderModelConfig, { type?: "chat" }>, "thinkingLevelMap" | "compat"> = {
   thinkingLevelMap: { max: "max" },
   compat: { forceAdaptiveThinking: true },
 };
@@ -147,11 +147,32 @@ function resolveEffortLevels(
 }
 
 /**
- * /model/info 显式声明的非 chat 模式，直接排除。
- * mode 缺失是自研/别名模型的常态（LiteLLM 静态 cost map 查不到公开名），
- * 不据此排除——那会把大量实际可对话的模型误滤掉。
+ * /model/info 显式声明的图像类模式：分流为 pi image 模型条目（spec: issue #1）。
+ * image_edit 部署标示支持图像输入（图生图/局部编辑），与 generation 同名时聚为一条、input 取并集。
  */
-const NON_CHAT_MODES = new Set(["embedding", "rerank", "image_generation"]);
+const IMAGE_MODES = new Set(["image_generation", "image_edit"]);
+
+/**
+ * decisions 类模式：分流为 pi classifier 模型条目。`evaluation` 是 LiteLLM 的同义
+ * mode（types/utils.py 的 decision 谓词为 mode in ("decisions", "evaluation")，
+ * v1.106.4 源码核实）——jev 系部署实际标 evaluation，两者都认。
+ */
+const DECISION_MODES = new Set(["decisions", "evaluation"]);
+
+/**
+ * 显式剔除的其余非 chat 模式（pi 无对应 ModelType/消费通道，spec out of scope）。
+ * 未知 mode 值不剔除——与 mode 缺失同精神（自研/别名模型常态，不误杀）。
+ */
+const EXCLUDED_MODES = new Set([
+  "embedding",
+  "rerank",
+  "audio_transcription",
+  "audio_speech",
+  "video_generation",
+  "realtime",
+  "batch",
+  "ocr",
+]);
 
 /**
  * 隐藏内部噪音条目（产品选择，非可调性问题）：
@@ -202,6 +223,22 @@ export function fallbackModels(instance?: Pick<InstanceConfig, "fallbackModels">
  * 后续可补全），vision / reasoning 任一 deployment 声明即认为支持。
  * 空 data 或全被过滤时返回 null（触发上层回落 stored / fallback）。
  */
+type CostAggregate = { input: number; output: number; cacheRead: number; cacheWrite: number };
+
+/**
+ * per-token 成本换算聚合：网关 input_cost_per_token 等字段为 USD/token，pi 的 ModelCost
+ * 为 USD/百万 token（pi-ai model-schema 明示）——聚合时统一换算单位后取 max（单调变换
+ * 保序，max 语义不变）。同名多 deployment 轮询时取保守上界。
+ */
+function aggregateCost(cost: CostAggregate, info: NonNullable<Pick<LiteLLMDeploymentEntry, "model_info">["model_info"]>): void {
+  cost.input = Math.max(cost.input, (info.input_cost_per_token ?? 0) * 1_000_000);
+  cost.output = Math.max(cost.output, (info.output_cost_per_token ?? 0) * 1_000_000);
+  cost.cacheRead = Math.max(cost.cacheRead, (info.cache_read_input_token_cost ?? 0) * 1_000_000);
+  cost.cacheWrite = Math.max(cost.cacheWrite, (info.cache_creation_input_token_cost ?? 0) * 1_000_000);
+}
+
+const ZERO_COST: CostAggregate = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
 export function transformModelInfo(data: LiteLLMDeploymentEntry[] | undefined): ProviderModelConfig[] | null {
   const merged = new Map<
     string,
@@ -214,14 +251,34 @@ export function transformModelInfo(data: LiteLLMDeploymentEntry[] | undefined): 
       sawReasoningUndeclared: boolean;
       reasoningParam: boolean;
       effortLevels: string[] | null;
-      cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+      cost: CostAggregate;
     }
   >();
+  // 非 chat 模态分桶（spec: issue #1）：图像桶（同名 generation+edit 聚合，edit 标示图像输入）、
+  // decisions 桶（同名聚合取首个非空 token 上限）。同名跨桶（如同名 chat+image 部署）
+  // 在实际 LiteLLM 配置中不存在；若出现则各自成条，行为可解释。
+  const imageAgg = new Map<string, { edit: boolean; cost: CostAggregate }>();
+  const decisionAgg = new Map<string, { maxInput?: number; cost: CostAggregate }>();
   for (const entry of data ?? []) {
     const name = entry.model_name;
     if (!name || HIDDEN_NAME_PATTERN.test(name)) continue;
     const info = entry.model_info ?? {};
-    if (info.mode && NON_CHAT_MODES.has(info.mode)) continue;
+    const mode = info.mode ?? null;
+    if (mode && IMAGE_MODES.has(mode)) {
+      const agg = imageAgg.get(name) ?? { edit: false, cost: { ...ZERO_COST } };
+      agg.edit ||= mode === "image_edit";
+      aggregateCost(agg.cost, info);
+      imageAgg.set(name, agg);
+      continue;
+    }
+    if (mode && DECISION_MODES.has(mode)) {
+      const agg = decisionAgg.get(name) ?? { cost: { ...ZERO_COST } };
+      agg.maxInput ??= info.max_input_tokens ?? undefined;
+      aggregateCost(agg.cost, info);
+      decisionAgg.set(name, agg);
+      continue;
+    }
+    if (mode && EXCLUDED_MODES.has(mode)) continue;
 
     const agg = merged.get(name) ?? {
       vision: true,
@@ -237,11 +294,8 @@ export function transformModelInfo(data: LiteLLMDeploymentEntry[] | undefined): 
     // vision 聚合 all-true（C 项）：LiteLLM 同名组轮询，任一 deployment 非"显式 true"
     // （含未声明）即不宣传——轮到不支持的后端发图会 500
     agg.vision = agg.vision && info.supports_vision === true;
-    // 成本按字段取 max：同名多 deployment 轮询时请求可能落到任一后端，取保守上界
-    agg.cost.input = Math.max(agg.cost.input, info.input_cost_per_token ?? 0);
-    agg.cost.output = Math.max(agg.cost.output, info.output_cost_per_token ?? 0);
-    agg.cost.cacheRead = Math.max(agg.cost.cacheRead, info.cache_read_input_token_cost ?? 0);
-    agg.cost.cacheWrite = Math.max(agg.cost.cacheWrite, info.cache_creation_input_token_cost ?? 0);
+    // 成本按字段换算 per-million 后取 max（同名多 deployment 轮询，取保守上界）
+    aggregateCost(agg.cost, info);
     // supports_reasoning 聚合三态（C 项）：任一 deployment 显式 false 一票否决；
     // 全部显式 true 才 true；其余（未声明混合 / 全未声明）为不确定 → 回落 params / 正则
     if (info.supports_reasoning === true) agg.sawReasoningTrue = true;
@@ -293,7 +347,7 @@ export function transformModelInfo(data: LiteLLMDeploymentEntry[] | undefined): 
     // forceAdaptiveThinking 对所有推理模型保留——它是 effort 传递的 wire 通道
     // （effort 值与档位枚举同构，budget 路径无法表达档位枚举；downstream fork
     // 2026-09-20 anthropic 端点实测 adaptive 形态被接受且 effort 语义生效）。
-    let thinking: Pick<ProviderModelConfig, "thinkingLevelMap" | "compat"> | undefined;
+    let thinking: Pick<Extract<ProviderModelConfig, { type?: "chat" }>, "thinkingLevelMap" | "compat"> | undefined;
     if (reasoning) {
       const levels = agg.effortLevels;
       let map: Record<string, string | null>;
@@ -312,7 +366,7 @@ export function transformModelInfo(data: LiteLLMDeploymentEntry[] | undefined): 
       // 明确检查 `?.off !== null`（v0.8.0 取证）——null 是其支持的运行时形状，
       // 上游类型声明不完整，此处断言越过
       thinking = {
-        thinkingLevelMap: map as unknown as ProviderModelConfig["thinkingLevelMap"],
+        thinkingLevelMap: map as unknown as Extract<ProviderModelConfig, { type?: "chat" }>["thinkingLevelMap"],
         compat: ADAPTIVE_THINKING.compat,
       };
     }
@@ -329,7 +383,27 @@ export function transformModelInfo(data: LiteLLMDeploymentEntry[] | undefined): 
     };
   });
 
-  return models.length > 0 ? models : null;
+  const imageModels = [...imageAgg].map<ProviderModelConfig>(([id, agg]) => ({
+    type: "image",
+    id,
+    name: id,
+    api: "litellm-images",
+    input: agg.edit ? (["text", "image"] as const) : (["text"] as const),
+    output: ["image"] as const,
+    cost: agg.cost,
+  }));
+  const decisionModels = [...decisionAgg].map<ProviderModelConfig>(([id, agg]) => ({
+    type: "classifier",
+    id,
+    name: id,
+    api: "litellm-decisions",
+    input: ["text"] as const,
+    contextWindow: agg.maxInput ?? 65536,
+    cost: agg.cost,
+  }));
+
+  const total = models.length + imageModels.length + decisionModels.length;
+  return total > 0 ? [...models, ...imageModels, ...decisionModels] : null;
 }
 
 /**

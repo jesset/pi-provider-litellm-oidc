@@ -223,12 +223,48 @@ env npm_config_registry=https://registry.npmjs.org/ \
 - 网络刷新成功的目录经 `context.publish({ persist })` 持久化到 `~/.pi/agent/models-store.json`，之后离线启动直接恢复真实目录，不再请求网关
 - `refreshModels` 遵守框架两阶段刷新协议：`allowNetwork=false`（扩展注册、每次 refresh 的 phase 1）零网络请求；网络阶段从 `context.credential` 取已刷新的 access token 调 `/model/info`（尊重框架 abort signal 与本地 15s 超时）
 - 数据源用 `/model/info` 而非 `/v1/models`：前者返回 deployment 级 DB 实配值（token limits、`supports_vision`、mode），后者的这些字段来自 LiteLLM 静态 cost map 按公开模型名查找——自研/别名模型（如 `kimi-k2.7-code`）一律缺失，会被误滤掉。要求网关把 `/model/info` 列入 `public_routes`（用户 JWT 可访问）
-- 过滤规则：剔除 `mode` 显式为 embedding/rerank/image_generation 的条目（mode 缺失是自研模型常态，不据此排除）；隐藏 `staging/` 前缀（网关内部命名空间）与 `-openai` 后缀（OpenAI 协议腿孪生，与 anthropic 腿重复）的内部条目；同名多 deployment 聚合为一条（token 上限等标量字段取首个非空值，成本字段取 max 保守上界）
+- 过滤与分流规则：`mode` 显式为 embedding/rerank/audio_transcription/audio_speech/video_generation/realtime/batch/ocr 的条目照旧剔除（pi 无对应消费通道）；`image_generation`/`image_edit` 分流为 pi `type:"image"` 模型条目、`decisions`/`evaluation`（同义 mode）分流为 `type:"classifier"` 条目（见「非 chat 模态」节）；mode 缺失是自研模型常态，不据此排除；隐藏 `staging/` 前缀（网关内部命名空间）与 `-openai` 后缀（OpenAI 协议腿孪生，与 anthropic 腿重复）的内部条目；同名多 deployment 聚合为一条（token 上限等标量字段取首个非空值，成本字段取 max 保守上界）
 - 能力聚合 all-true（v0.10.0 起）：LiteLLM 同名组按 deployment 轮询，`supports_vision` 需全部 deployment 显式支持才宣传（未声明当不支持——轮到不支持的后端发图会 500）；`supports_reasoning` 任一显式 false 一票否决、全部显式 true 才直出、未声明混合回落兜底链。`input` 按 vision 判定决定是否含 image
 - `model.cost` 从 `/model/info` 的 4 个 per-token 成本字段实配（`input`/`output`/`cache_read_input`/`cache_creation`，多 deployment 取 max 上界，缺失保持 0）——请求前估算与 `x-litellm-response-cost` 实付口径互补
 - `reasoning` 四级回落推断：网关 `supports_reasoning` 声明层三态 → `reasoning_effort_levels`（档位存在即推理）→ `supported_openai_params` 含 `reasoning_effort`/`thinking` → 名字前缀正则 `REASONING_MODEL_PATTERN` 兜底（覆盖稀疏模型）
 - 思考档位自动推导 + 菜单精确对齐（v0.10.1 起）：网关 `model_info` 的 `reasoning_effort_levels`（完整档集，同名多 deployment 取交集，未知档名忽略）或 `supports_{xhigh,max}_reasoning_effort` 布尔可精确声明档位——**有档位时菜单与档集精确对齐**：档集内的档直传自身 effort（选什么发什么），档集外的默认档以 `null` 从菜单显式排除，网关 `none` 档即 off（不含则 `off:null`——不发 disabled，对强制思考后端会 4xx，显式 off 请求 clamp 最低档）；**无档位（或同名组交集为空）**维持 `{ max: "max" }` 兜底（v0.8.0 行为，全菜单可选）。`forceAdaptiveThinking` 对全部推理模型保留（effort 传递通道：budget 路径无法表达档位枚举）。实测 glm-5.2 max 比 high 多约 70% 思考量。LiteLLM 网关已配档位字段（2026-09-27 探针）：glm-5.3 系 / k3 系 / claude 系（`['low','high','max']`）菜单为 low/high/max 三档；deepseek-flash（`['none','low','high','max']`）菜单为 off/low/high/max；设计决策见 `docs/adr/0001`
 - 未登录或拉取失败时回退该实例的持久化目录 ?? 静态兜底目录
+
+## 非 chat 模态（image / decisions）
+
+网关上部署的非 chat 模态对 pi 自动可见（mode 数据驱动，网关声明权威哲学的延伸）——网关部署什么，客户端无需发版即暴露什么：
+
+- **图像生成/编辑**（mode `image_generation` / `image_edit`）：产出 pi image 模型条目，同名 generation+edit 部署聚为一条（edit 部署声明图像输入能力）。调用分流：输入全 text → `POST /v1/images/generations`（JSON，`response_format:"b64_json"`）；含 image block → `POST /v1/images/edits`（multipart）。响应 `b64_json` 直出，缺失时回落下载 `url`。`size`/`n`/`quality` 经 codemode 调用的 `options.metadata` 透传（size 默认 1024x1024）。图像模型不出现在 `/model` 选择器（pi by design），agent 经 codemode 调用：
+
+  ```js
+  // @options: {"timeout_ms": 300000}
+  const painter = await models.getModelOfType("image", "litellm", "flux3-klein");
+  const r = await models.generateImages(painter, {
+    input: [{ type: "text", text: "a red fox in the snow, watercolor" }],
+  });
+  if (r.stopReason !== "stop") return r.errorMessage;
+  for (const b of r.output) if (b.type === "image") image(b);
+  ```
+
+- **结构化决策**（mode `decisions` / `evaluation`，同义）：产出 pi classifier 模型条目，System One wire 调 `POST /v1/systemone`（bool↔noul 双向映射，answers 按 name keyed，usage token 回填并计入会话成本）。agent 经 codemode `models.classify()` 提 choice/score/bool 三型问题拿概率化答案，适合批量路由/打标/过滤：
+
+  ```js
+  const judge = await models.getModelOfType("classifier", "litellm", "typesafe/jev-latest");
+  const r = await models.classify(judge, {
+    state: { text: "Customer charged twice for order #4411" },
+    questions: {
+      refund: { type: "bool", instructions: "Is this a refund request?", criteria: { true: "yes", false: "no" } },
+      urgency: { type: "choice", instructions: "How urgent?", criteria: { low: "can wait", high: "today" } },
+    },
+  });
+  if (r.stopReason !== "stop") return r.errorMessage;
+  return r.answers.refund.probability;  // 0.99
+  ```
+
+- 认证与 chat 同源：两实现共用实例 OIDC 凭证（框架 5min 窗口自动刷新后注入），customer 头经模型级 stamp 兜底通道自动携带；session 头不注入（stream-only hook 限制）
+- `/session-header` 汇总各实例的模态清单（image × N、classifier × N）
+- 成本现实：decisions 端点有真实 token 计数；images 端点实测 usage 全 0 且无 `x-litellm-response-cost`，单次成本按 0 兜底（网关 `x-litellm-key-spend` 为 key 累计口径，不采用）
+- 边界：embedding / rerank / audio 转写 / TTS / OCR / video / realtime 等 pi 无对应 ModelType，维持剔除（未来若接入经 codemode 工具通道，另行 spec）
 
 ## 验证行为说明
 

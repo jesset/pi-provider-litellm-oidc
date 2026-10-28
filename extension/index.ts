@@ -3,6 +3,8 @@ import type { ModelsStoreEntry, OAuthCredentials, OAuthLoginCallbacks } from "@e
 import { loadRuntimeConfig } from "./config.ts";
 import type { InstanceConfig, RuntimeConfig } from "./config.ts";
 import { setupLiteLLMCostTracking } from "./cost.ts";
+import { createDecisionsClassifier } from "./decisions.ts";
+import { createImagesApi } from "./images.ts";
 import { extractJwtClaim, loginDeviceFlow, refreshAccessToken } from "./keycloak.ts";
 import { fallbackModels, fetchGatewayModels, stampCustomerHeader, storedModels } from "./models.ts";
 
@@ -32,6 +34,8 @@ function createProviderConfig(instance: InstanceConfig): ProviderConfig {
     authHeader: true,
     models: fallbackModels(instance),
     oauth: createOAuth(instance),
+    images: { "litellm-images": createImagesApi(instance) },
+    classifiers: { "litellm-decisions": createDecisionsClassifier(instance) },
     async refreshModels(context): Promise<ProviderModelConfig[]> {
       if (!context.allowNetwork) {
         return storedModels(context.stored) ?? fallbackModels(instance);
@@ -108,6 +112,20 @@ export function setupExtension(pi: ExtensionAPI, config: RuntimeConfig): void {
 
       for (const instance of config.instances) {
         lines.push("", `[${instance.providerId}] ${instance.displayName}`);
+        // 模态清单（spec #1 用户故事 19）：getModelsOfType 防御性探测，兼容无此 API 的运行时
+        const countOf = (type: string): number => {
+          const registry = ctx.modelRegistry as unknown as {
+            getModelsOfType?: (type: string, provider?: string) => readonly unknown[];
+          };
+          return typeof registry?.getModelsOfType === "function"
+            ? (registry.getModelsOfType(type, instance.providerId) ?? []).length
+            : -1;
+        };
+        const modality =
+          countOf("image") < 0 || countOf("classifier") < 0
+            ? "（运行时无目录查询）"
+            : `image × ${countOf("image")}、classifier × ${countOf("classifier")}（codemode：models.generateImages()/classify()）`;
+        lines.push(`非 chat 模态 : ${modality}`);
         const bearer = await ctx.modelRegistry.getApiKeyForProvider(instance.providerId);
         lines.push(`登录状态 : ${bearer ? "已登录" : "未登录"}`);
         if (!instance.customer.header) {
