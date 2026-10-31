@@ -1,0 +1,63 @@
+# CI
+# - push / PR：verify（构建 + 语法冒烟 + 供应链不变量），test（bun 单元测试）
+# - tag v*：额外把构建产物发布到 npm registry（需 NPM_TOKEN secret）
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      # --ignore-scripts：装依赖时禁用一切 lifecycle 脚本（含 prepare），构建统一走显式 npm run build
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: node --check dist/index.js
+      - run: npm run supply-chain:guard
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # 钉死与本地一致的 bun 版本；测试不依赖 node_modules（pi-* 仅类型导入，transpile 时擦除）
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun test
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [verify, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance（--provenance 要求 OIDC token）
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+      # 版本一致性断言：tag == package.json == package-lock.json，杜绝打错 tag 静默发布错版
+      - run: test "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}"
+      - run: test "$(node -p "require('./package-lock.json').version")" = "${GITHUB_REF_NAME#v}"
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: node --check dist/index.js
+      - run: npm run supply-chain:guard
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

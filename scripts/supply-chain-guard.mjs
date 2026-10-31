@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-// 发布物结构不变量检查（移植自 balcsida 的裁剪版，调研与裁剪理由见
-// docs/wayfinder/research/08-balcsida-packaging-tamper.md）：
+// 发布物结构不变量检查：
 // 禁安装期脚本（prepare 例外——git 源安装的生命线）、强制零运行时依赖、
 // 禁非 registry 依赖 spec、lockfile resolved 域名白名单、npm pack 文件白名单。
 // CI verify/publish 均执行；本地需先 npm run build 再运行本脚本。
@@ -41,8 +40,9 @@ for (const field of ["dependencies", "devDependencies", "peerDependencies", "ove
   scanSpecs(pkg[field], field);
 }
 
-// 4. lockfile resolved 域名白名单（官方 registry + 私有 GitLab）
-const ALLOWED_HOSTS = ["https://registry.npmjs.org/", "https://github.com/jesset/"];
+// 4. lockfile resolved 域名白名单（只允许官方 npm registry：零运行时依赖意味着
+//    lockfile 仅含 devDependency，任何其他来源都是可疑注入）
+const ALLOWED_HOSTS = ["https://registry.npmjs.org/"];
 let lock = null;
 try {
   lock = JSON.parse(readFileSync("package-lock.json", "utf8"));
