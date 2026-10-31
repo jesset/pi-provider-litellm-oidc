@@ -8,7 +8,7 @@ import { opaqueToken } from "./helpers.ts";
  * 非 chat 模态接入（image_generation / image_edit / decisions）的集成接缝测试：
  * 从 setupExtension 进入，穿越 ProviderConfig 注册 → refreshModels（mock fetch 的
  * /model/info）→ 目录分流断言 → images/classifiers 实现的 wire 出口。
- * spec: GitLab issue #1；接缝方案经用户确认（fake-pi 集成层）。
+ * 接缝为 fake-pi 集成层。
  */
 
 /** fake-pi 最小表面：捕获 registerProvider/registerCommand/on（先例 multi-instance.test.ts）。 */
@@ -36,11 +36,11 @@ function runtimeConfig() {
     {
       instances: [
         {
-          id: "litellm",
-          name: "LiteLLM Gateway",
+          id: "litellm-oidc",
+          name: "LiteLLM OIDC gateway",
           gatewayUrl: "https://litellm.example.com",
           keycloakUrl: "https://keycloak.example.com",
-          realm: "Example",
+          realm: "example",
           clientId: "coding-agent-cli",
         },
       ],
@@ -100,7 +100,7 @@ const MIXED_MODEL_INFO = {
   ],
 };
 
-/** /v1/systemone 实测响应（jev-1.14.0，2026-10-28，spec #1 证据链）。 */
+/** /v1/systemone 网关实测响应（jev-1.14.0）。 */
 const SYSTEMONE_RESPONSE = {
   model: "jev-1.14.0",
   answers: {
@@ -113,13 +113,13 @@ const SYSTEMONE_RESPONSE = {
 
 /** 从捕获的 ProviderConfig 取 litellm-decisions 实现（接缝出口）。 */
 function getClassifierImpl(providers: Map<string, ProviderConfig>) {
-  return providers.get("litellm")!.classifiers!["litellm-decisions"]!.classify;
+  return providers.get("litellm-oidc")!.classifiers!["litellm-decisions"]!.classify;
 }
 
 function classifierModel() {
   return {
     type: "classifier" as const,
-    provider: "litellm",
+    provider: "litellm-oidc",
     id: "typesafe/jev-latest",
     api: "litellm-decisions",
     input: ["text"],
@@ -285,7 +285,7 @@ describe("litellm-decisions.classify — System One wire（真实报文 fixture�
   });
 });
 
-/** /v1/images/generations 实测响应骨架（flux3-klein，2026-10-28）。 */
+/** /v1/images/generations 网关实测响应骨架（flux3-klein）。 */
 const IMAGE_RESPONSE_B64 = {
   created: 1770000000,
   data: [{ b64_json: btoa("fake-png-bytes"), revised_prompt: "a tiny red paper crane", url: "" }],
@@ -309,7 +309,7 @@ const IMAGE_ERROR_500 = {
 function imageModel() {
   return {
     type: "image" as const,
-    provider: "litellm",
+    provider: "litellm-oidc",
     id: "flux3-klein",
     api: "litellm-images",
     input: ["text"],
@@ -319,7 +319,7 @@ function imageModel() {
 }
 
 function getImageImpl(providers: Map<string, ProviderConfig>) {
-  return providers.get("litellm")!.images!["litellm-images"]!.generateImages;
+  return providers.get("litellm-oidc")!.images!["litellm-images"]!.generateImages;
 }
 
 describe("litellm-images.generateImages — OpenAI Images wire（真实报文 fixture）", () => {
@@ -471,7 +471,7 @@ describe("refreshModels — mode 数据驱动分流（集成接缝）", () => {
   it("image_generation → image 条目、evaluation → classifier 条目、其余非 chat 照旧剔除", async () => {
     const { pi, providers } = fakePi();
     setupExtension(pi, runtimeConfig());
-    const config = providers.get("litellm")!;
+    const config = providers.get("litellm-oidc")!;
 
     const fetchMock = mockFetch((url) =>
       url.endsWith("/model/info")
@@ -518,7 +518,7 @@ describe("refreshModels — mode 数据驱动分流（集成接缝）", () => {
   it("同名 generation+edit 部署聚合为一条 image 条目，input 取并集", async () => {
     const { pi, providers } = fakePi();
     setupExtension(pi, runtimeConfig());
-    const config = providers.get("litellm")!;
+    const config = providers.get("litellm-oidc")!;
 
     const fetchMock = mockFetch(() =>
       new Response(
@@ -547,16 +547,16 @@ describe("refreshModels — mode 数据驱动分流（集成接缝）", () => {
     }
   });
 
-  it("隐藏过滤对非 chat 条目同样生效（staging/ 前缀、-openai 后缀）", async () => {
+  it("隐藏过滤对非 chat 条目同样生效（-openai 后缀）", async () => {
     const { pi, providers } = fakePi();
     setupExtension(pi, runtimeConfig());
-    const config = providers.get("litellm")!;
+    const config = providers.get("litellm-oidc")!;
 
     const fetchMock = mockFetch(() =>
       new Response(
         JSON.stringify({
           data: [
-            { model_name: "staging/flux3-klein", model_info: { mode: "image_generation" } },
+            { model_name: "flux3-klein-openai", model_info: { mode: "image_generation" } },
             { model_name: "jev-latest-openai", model_info: { mode: "evaluation" } },
           ],
         }),
@@ -576,7 +576,7 @@ describe("refreshModels — mode 数据驱动分流（集成接缝）", () => {
   it("离线阶段 stored 透传混合条目（image/classifier 不被丢掉）", async () => {
     const { pi, providers } = fakePi();
     setupExtension(pi, runtimeConfig());
-    const config = providers.get("litellm")!;
+    const config = providers.get("litellm-oidc")!;
 
     const stored = {
       models: [

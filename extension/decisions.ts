@@ -11,8 +11,8 @@ import type { InstanceConfig } from "./config.ts";
 /**
  * litellm-decisions classifier 实现：System One wire 调 LiteLLM 网关 `/systemone` 端点。
  *
- * - wire 与 pi 内置 `typesafe-system-one` 同构（LiteLLM v1.106.4 源码 + 实测
- *   逐字段核对，2026-10-28）：请求 `{model, state, questions: {id: {type: noul|choice|score,
+ * - wire 与 pi 内置 `typesafe-system-one` 同构（LiteLLM v1.106.4 源码 + 网关实测
+ *   逐字段核对）：请求 `{model, state, questions: {id: {type: noul|choice|score,
  *   instructions, criteria}}}`，pi 侧 bool ↔ wire noul 双向映射；响应 `answers` keyed map。
  * - 不选 OpenAI Decisions 格式（/v1/decisions）：System One 与 pi 分类语义同构、keyed
  *   answers 比数组序防错；LiteLLM 对两种格式双向翻译，格式选择不影响模型可用性。
@@ -21,8 +21,8 @@ import type { InstanceConfig } from "./config.ts";
  * - 图像输入（条目 input 含 "image" 时）：System One assets 形态——state 变数组
  *   （`<image-N>` 引用在前 + 原 state）、assets map（PNG/JPEG 白名单，TypeSafe
  *   上游限制）、`TypeSafe-Danger-Zone-Images: true` opt-in 头（必须随图发送：网关
- *   drop_params 对无头请求静默剥离 assets，返回自信的错误答案——实测；
- *   配方与 pi 内置 system-one-shared 的 assets 分支同构，jev-1.14.0
+ *   drop_params 对无头请求静默剥离 assets，返回自信的错误答案（实测）；
+ *   配方与 pi 内置 system-one-shared 的 assets 分支同构；jev-1.14.0
  *   512×512 实测 noul 判色正确、图像 token 计入 usage）。图像能力由网关
  *   supports_vision 声明驱动（all-true 聚合），未声明不宣传。
  * - 错误不 throw：一律按 ClassifierResult 形状返回（codemode 契约检查 stopReason）。
@@ -182,7 +182,7 @@ export function createDecisionsClassifier(
         };
         if (wired.assets) {
           // opt-in 头必须随 assets 发送：无头时网关 drop_params 静默剥离图像，
-          // 返回 200 与自信的错误答案（实测，风险最高失败模式）
+          // 返回 200 与自信的错误答案（实测，风险最高的失败模式）
           headers["typesafe-danger-zone-images"] = "true";
         }
         const response = await fetch(`${baseUrl}/systemone`, {

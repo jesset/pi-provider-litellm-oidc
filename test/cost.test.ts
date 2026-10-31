@@ -104,9 +104,9 @@ const ME = (provider: string, usage: Record<string, number>) => ({
 describe("setupLiteLLMCostTracking — hook 装配", () => {
   it("after_provider_response 存成本，message_end 按比例摊到 usage.cost", async () => {
     const { pi, emit } = fakePi();
-    setupLiteLLMCostTracking(pi, ["litellm"]);
-    await emit("after_provider_response", APR({ "x-litellm-response-cost": "0.4" }), CTX("litellm"));
-    const result = await emit("message_end", ME("litellm", { input: 10, output: 30 }));
+    setupLiteLLMCostTracking(pi, ["litellm-oidc"]);
+    await emit("after_provider_response", APR({ "x-litellm-response-cost": "0.4" }), CTX("litellm-oidc"));
+    const result = await emit("message_end", ME("litellm-oidc", { input: 10, output: 30 }));
     expect(result.message.usage.cost.total).toBe(0.4);
     expect(result.message.usage.cost.input).toBeCloseTo(0.1, 10);
     expect(result.message.usage.cost.output).toBeCloseTo(0.3, 10);
@@ -116,16 +116,16 @@ describe("setupLiteLLMCostTracking — hook 装配", () => {
 
   it("摊分后清 slot：第二次 message_end 无成本返回 undefined", async () => {
     const { pi, emit } = fakePi();
-    setupLiteLLMCostTracking(pi, ["litellm"]);
-    await emit("after_provider_response", APR({ "x-litellm-response-cost": "0.4" }), CTX("litellm"));
-    await emit("message_end", ME("litellm", { input: 10, output: 30 }));
-    const result2 = await emit("message_end", ME("litellm", { input: 5, output: 5 }));
+    setupLiteLLMCostTracking(pi, ["litellm-oidc"]);
+    await emit("after_provider_response", APR({ "x-litellm-response-cost": "0.4" }), CTX("litellm-oidc"));
+    await emit("message_end", ME("litellm-oidc", { input: 10, output: 30 }));
+    const result2 = await emit("message_end", ME("litellm-oidc", { input: 5, output: 5 }));
     expect(result2).toBeUndefined();
   });
 
   it("非已知 provider 的响应被忽略（不污染 LiteLLM 成本状态）", async () => {
     const { pi, emit } = fakePi();
-    setupLiteLLMCostTracking(pi, ["litellm"]);
+    setupLiteLLMCostTracking(pi, ["litellm-oidc"]);
     await emit("after_provider_response", APR({ "x-litellm-response-cost": "0.4" }), CTX("openai"));
     const result = await emit("message_end", ME("openai", { input: 10, output: 30 }));
     expect(result).toBeUndefined();
@@ -133,35 +133,35 @@ describe("setupLiteLLMCostTracking — hook 装配", () => {
 
   it("无成本头的响应清掉 slot（防止跨请求残留串扰）", async () => {
     const { pi, emit } = fakePi();
-    setupLiteLLMCostTracking(pi, ["litellm"]);
-    await emit("after_provider_response", APR({ "x-litellm-response-cost": "0.4" }), CTX("litellm"));
+    setupLiteLLMCostTracking(pi, ["litellm-oidc"]);
+    await emit("after_provider_response", APR({ "x-litellm-response-cost": "0.4" }), CTX("litellm-oidc"));
     // 同 provider 的无头响应清 slot
-    await emit("after_provider_response", APR({}), CTX("litellm"));
-    const result = await emit("message_end", ME("litellm", { input: 10, output: 30 }));
+    await emit("after_provider_response", APR({}), CTX("litellm-oidc"));
+    const result = await emit("message_end", ME("litellm-oidc", { input: 10, output: 30 }));
     expect(result).toBeUndefined();
   });
 
   it("无 pending 成本时 message_end 不摊分（返回 undefined）", async () => {
     const { pi, emit } = fakePi();
-    setupLiteLLMCostTracking(pi, ["litellm"]);
-    const result = await emit("message_end", ME("litellm", { input: 10, output: 30 }));
+    setupLiteLLMCostTracking(pi, ["litellm-oidc"]);
+    const result = await emit("message_end", ME("litellm-oidc", { input: 10, output: 30 }));
     expect(result).toBeUndefined();
   });
 
   it("按 provider 隔离 slot：B 的无头响应不清 A 的 pending（串扰防护）", async () => {
     const { pi, emit } = fakePi();
-    setupLiteLLMCostTracking(pi, ["litellm", "litellm2"]);
-    await emit("after_provider_response", APR({ "x-litellm-response-cost": "0.4" }), CTX("litellm"));
-    await emit("after_provider_response", APR({}), CTX("litellm2"));
-    const result = await emit("message_end", ME("litellm", { input: 10, output: 30 }));
+    setupLiteLLMCostTracking(pi, ["litellm-oidc", "litellm-oidc-2"]);
+    await emit("after_provider_response", APR({ "x-litellm-response-cost": "0.4" }), CTX("litellm-oidc"));
+    await emit("after_provider_response", APR({}), CTX("litellm-oidc-2"));
+    const result = await emit("message_end", ME("litellm-oidc", { input: 10, output: 30 }));
     expect(result.message.usage.cost.total).toBe(0.4);
   });
 
   it("可配置头名：读 x-litellm-response-cost-original", async () => {
     const { pi, emit } = fakePi();
-    setupLiteLLMCostTracking(pi, ["litellm"], "x-litellm-response-cost-original");
-    await emit("after_provider_response", APR({ "x-litellm-response-cost-original": "0.001" }), CTX("litellm"));
-    const result = await emit("message_end", ME("litellm", { input: 50, output: 50 }));
+    setupLiteLLMCostTracking(pi, ["litellm-oidc"], "x-litellm-response-cost-original");
+    await emit("after_provider_response", APR({ "x-litellm-response-cost-original": "0.001" }), CTX("litellm-oidc"));
+    const result = await emit("message_end", ME("litellm-oidc", { input: 50, output: 50 }));
     expect(result.message.usage.cost.total).toBe(0.001);
   });
 });

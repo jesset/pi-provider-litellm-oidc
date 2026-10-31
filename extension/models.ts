@@ -12,9 +12,9 @@ interface LiteLLMDeploymentEntry {
     max_input_tokens?: number | null;
     max_output_tokens?: number | null;
     supports_vision?: boolean | null;
-    /** 网关实配的推理能力声明（研究 04：47/53 可见部署有值）。优先于名字正则。 */
+    /** 网关实配的推理能力声明（有值即权威）。优先于名字正则。 */
     supports_reasoning?: boolean | null;
-    /** 网关声明的 OpenAI 参数白名单；含 reasoning_effort / thinking 即可推理（研究 04 bonus）。 */
+    /** 网关声明的 OpenAI 参数白名单；含 reasoning_effort / thinking 即可推理。 */
     supported_openai_params?: string[] | null;
     /** per-token 成本（DB 实配；缺失保持 0——网关实测存在部分配置的 deployment） */
     input_cost_per_token?: number | null;
@@ -44,7 +44,7 @@ const REASONING_PARAM_NAMES = new Set(["reasoning_effort", "thinking"]);
  *
  * - thinkingLevelMap 只列 max：off/minimal/low/medium/high 在 pi 的
  *   getSupportedThinkingLevels 里默认可选（非 xhigh/max 级别默认返回 true），
- *   xhigh 不声明（litellm 后端均不支持，pi-ai 内置 zai/kimi catalog 亦无 xhigh）。
+ *   xhigh 不声明（未声明支持 xhigh 的网关不出现该档位，pi-ai 内置 catalog 亦无 xhigh）。
  * - ⚠️ 兜底路径的 off 保持省略（本常量不声明 off 键）：未声明档位时后端的
  *   关思考能力未知，走 pi 默认（off 可选、发 thinking:{type:"disabled"}）最
  *   保守。有档位声明后 off 按档集处置（含 none → off:"off"，不含 → off:null
@@ -61,13 +61,12 @@ const REASONING_PARAM_NAMES = new Set(["reasoning_effort", "thinking"]);
  * - compat.forceAdaptiveThinking 让 anthropic-messages 腿走 adaptive 分支，effort
  *   经 output_config.effort 传给网关；否则走 budget-based，max 被 clampReasoning
  *   压到 high、effort 不传递，max 沦为 UI 摆设。
- * - 实测（2026-08-24）litellm glm-5.2 adaptive+effort=max 比 high 多约 70% 思考量
- *   （679 vs 395 字符）；k3 / kimi-k2.7-code / kimi/k3 / claude-sonnet-5 同样接受
- *   adaptive+max。其余模型为限流/权限无法实测，但网关对 adaptive 格式无拒绝
- *   （最坏情况后端不思考，不报错）。
+ * - 实测（2026-08-24，兼容 Anthropic 协议的 LiteLLM 网关）glm-5.2
+ *   adaptive+effort=max 比 high 多约 70% 思考量（679 vs 395 字符）；
+ *   k3 / kimi-k2.7-code / claude-sonnet-5 同等接受 adaptive+max。其余模型
+ *   因限流/权限未实测，但网关对 adaptive 格式无拒绝（最坏后端不思考，不报错）。
  * - LiteLLM anthropic 腿桥接行为（v1.100.1 源码核实，litellm/llms/anthropic/
- *   experimental_pass_through/adapters/transformation.py，自 downstream fork
- *   研究吸收）：非 Claude 后端 thinking → reasoning_effort，adaptive 默认
+ *   experimental_pass_through/adapters/transformation.py）：非 Claude 后端 thinking → reasoning_effort，adaptive 默认
  *   medium 但 output_config.effort 覆盖（effort=max → reasoning_effort=max）；
  *   后端 reasoning_content 回译为 anthropic thinking 块（含流式 thinking_delta）。
  */
@@ -76,7 +75,7 @@ const ADAPTIVE_THINKING: Pick<Extract<ProviderModelConfig, { type?: "chat" }>, "
   compat: { forceAdaptiveThinking: true },
 };
 
-/** supported_openai_params 是否声明了推理参数（研究 04：比名字正则更直接的能力信号）。 */
+/** supported_openai_params 是否声明了推理参数（比名字正则更直接的能力信号）。 */
 function hasReasoningParam(params: string[] | null | undefined): boolean {
   return Array.isArray(params) && params.some((p) => REASONING_PARAM_NAMES.has(p));
 }
@@ -147,7 +146,7 @@ function resolveEffortLevels(
 }
 
 /**
- * /model/info 显式声明的图像类模式：分流为 pi image 模型条目（spec: issue #1）。
+ * /model/info 显式声明的图像类模式：分流为 pi image 模型条目。
  * image_edit 部署标示支持图像输入（图生图/局部编辑），与 generation 同名时聚为一条、input 取并集。
  */
 const IMAGE_MODES = new Set(["image_generation", "image_edit"]);
@@ -175,37 +174,13 @@ const EXCLUDED_MODES = new Set([
 ]);
 
 /**
- * 隐藏内部噪音条目（产品选择，非可调性问题）：
- * - staging/ 前缀：网关内部后端命名空间，与公开别名指向同一批后端
- * - -openai 后缀：OpenAI 协议腿孪生，与 anthropic 腿功能重复
+ * 隐藏重复条目（产品选择，非可调性问题）：-openai 后缀是 OpenAI 协议腿孪生，
+ * 与 anthropic 腿功能重复（LiteLLM /v1/messages 支持协议转换，两条腿都能调通）。
  */
-const HIDDEN_NAME_PATTERN = /(^staging\/)|(-openai$)/i;
+const HIDDEN_NAME_PATTERN = /-openai$/i;
 
-const FALLBACK_MODELS: ProviderModelConfig[] = [
-  { id: "claude-opus-5", contextWindow: 1048576, maxTokens: 131072, vision: false },
-  { id: "claude-fable-5", contextWindow: 1048576, maxTokens: 131072, vision: false },
-  { id: "claude-opus-4-8", contextWindow: 1048576, maxTokens: 131072, vision: false },
-  { id: "claude-opus-4-7", contextWindow: 1048576, maxTokens: 131072, vision: false },
-  { id: "claude-opus-4-6", contextWindow: 1048576, maxTokens: 131072, vision: false },
-  { id: "claude-sonnet-5", contextWindow: 1048576, maxTokens: 131072, vision: true },
-  { id: "claude-sonnet-4-6", contextWindow: 1048576, maxTokens: 131072, vision: true },
-  { id: "claude-haiku-4-5-20251001", contextWindow: 200000, maxTokens: 64000, vision: false },
-  { id: "kimi-k2.7-code", contextWindow: 200000, maxTokens: 131072, vision: true },
-  { id: "deepseek-v4-flash", contextWindow: 1000000, maxTokens: 8192, vision: false },
-  { id: "zai/glm-4.7", contextWindow: 200000, maxTokens: 128000, vision: false },
-].map((m) => ({
-  id: m.id,
-  name: m.id,
-  reasoning: true,
-  input: (m.vision ? ["text", "image"] : ["text"]) as ("text" | "image")[],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: m.contextWindow,
-  maxTokens: m.maxTokens,
-  ...ADAPTIVE_THINKING,
-}));
-
-export function fallbackModels(instance?: Pick<InstanceConfig, "fallbackModels">): ProviderModelConfig[] {
-  return instance?.fallbackModels ?? FALLBACK_MODELS;
+export function fallbackModels(instance: Pick<InstanceConfig, "fallbackModels">): ProviderModelConfig[] {
+  return instance.fallbackModels.slice();
 }
 
 /**
@@ -214,7 +189,7 @@ export function fallbackModels(instance?: Pick<InstanceConfig, "fallbackModels">
  * （v1.95.0 proxy/utils.py create_model_info_response），自研/别名模型一律缺失，
  * alias 名返回的是"这个名字在静态表里的参数"而非网关实际部署参数。
  * /model/info 返回 DB 实配值（token limits、supports_vision），需网关将其列入
- * public_routes（LiteLLM 已配置）。
+ * public_routes。
  * Returns null on auth failure, network error, or abort.
  */
 /**
@@ -257,7 +232,7 @@ export function transformModelInfo(
       cost: CostAggregate;
     }
   >();
-  // 非 chat 模态分桶（spec: issue #1）：图像桶（同名 generation+edit 聚合，edit 标示图像输入）、
+  // 非 chat 模态分桶：图像桶（同名 generation+edit 聚合，edit 标示图像输入）、
   // decisions 桶（同名聚合取首个非空 token 上限）。同名跨桶（如同名 chat+image 部署）
   // 在实际 LiteLLM 配置中不存在；若出现则各自成条，行为可解释。
   const imageAgg = new Map<string, { edit: boolean; cost: CostAggregate }>();
@@ -298,12 +273,12 @@ export function transformModelInfo(
     };
     agg.maxInput ??= info.max_input_tokens ?? undefined;
     agg.maxOutput ??= info.max_output_tokens ?? undefined;
-    // vision 聚合 all-true（C 项）：LiteLLM 同名组轮询，任一 deployment 非"显式 true"
+    // vision 聚合 all-true：LiteLLM 同名组轮询，任一 deployment 非"显式 true"
     // （含未声明）即不宣传——轮到不支持的后端发图会 500
     agg.vision = agg.vision && info.supports_vision === true;
     // 成本按字段换算 per-million 后取 max（同名多 deployment 轮询，取保守上界）
     aggregateCost(agg.cost, info);
-    // supports_reasoning 聚合三态（C 项）：任一 deployment 显式 false 一票否决；
+    // supports_reasoning 聚合三态：任一 deployment 显式 false 一票否决；
     // 全部显式 true 才 true；其余（未声明混合 / 全未声明）为不确定 → 回落 params / 正则
     if (info.supports_reasoning === true) agg.sawReasoningTrue = true;
     else if (info.supports_reasoning === false) agg.sawReasoningFalse = true;
@@ -352,7 +327,7 @@ export function transformModelInfo(
     // - 同名组档位交集为空视同未声明（回落兜底）：档位声明不相交几乎必然是网关配置
     //   错误，砍到只剩 off 比维持兜底伤害更大
     // forceAdaptiveThinking 对所有推理模型保留——它是 effort 传递的 wire 通道
-    // （effort 值与档位枚举同构，budget 路径无法表达档位枚举；downstream fork
+    // （effort 值与档位枚举同构，budget 路径无法表达档位枚举；
     // 2026-09-20 anthropic 端点实测 adaptive 形态被接受且 effort 语义生效）。
     let thinking: Pick<Extract<ProviderModelConfig, { type?: "chat" }>, "thinkingLevelMap" | "compat"> | undefined;
     if (reasoning) {

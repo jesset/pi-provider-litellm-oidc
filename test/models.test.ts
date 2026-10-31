@@ -15,17 +15,16 @@ function byId(models: ReturnType<typeof transformModelInfo>): Record<string, Non
  * 这些条目故意不含 supports_reasoning，使当前 regex 行为与新行为一致。
  */
 describe("transformModelInfo — 现有行为锁定", () => {
-  it("过滤 staging/ 前缀与 -openai 后缀的内部噪音条目", () => {
+  it("过滤 -openai 后缀的协议腿孪生条目", () => {
     const models = transformModelInfo([
       { model_name: "claude-sonnet-5", model_info: { mode: "chat" } },
-      { model_name: "staging/internal-model", model_info: { mode: "chat" } },
       { model_name: "k3-openai", model_info: { mode: "chat" } },
     ]);
     const ids = (models ?? []).map((m) => m.id);
     expect(ids).toEqual(["claude-sonnet-5"]);
   });
 
-  it("过滤 embedding / rerank 等无通道模式；image_generation 分流为 image 条目（spec #1）", () => {
+  it("过滤 embedding / rerank 等无通道模式；image_generation 分流为 image 条目", () => {
     const models = transformModelInfo([
       { model_name: "text-embed-v1", model_info: { mode: "embedding" } },
       { model_name: "rerank-v1", model_info: { mode: "rerank" } },
@@ -41,7 +40,7 @@ describe("transformModelInfo — 现有行为锁定", () => {
     expect(byId["claude-sonnet-5"]?.type).toBeUndefined();
   });
 
-  it("decisions / evaluation 双 mode 都分流为 classifier 条目（spec #1）", () => {
+  it("decisions / evaluation 双 mode 都分流为 classifier 条目", () => {
     const models = transformModelInfo([
       { model_name: "jev-a", model_info: { mode: "decisions" } },
       { model_name: "jev-b", model_info: { mode: "evaluation", max_input_tokens: 65536 } },
@@ -128,7 +127,7 @@ describe("transformModelInfo — 现有行为锁定", () => {
     expect(m.contextWindow).toBe(200000);
     expect(m.maxTokens).toBe(131072);
     // false+true 混合 → 不宣传（LiteLLM 同名组轮询，宣传了任一 deployment 不支持
-    // 的能力，轮到它时就 500）——C 项 any→all 修正
+    // 的能力，轮到它时就 500）——能力聚合法修正
     expect(m.input).toEqual(["text"]);
   });
 
@@ -173,7 +172,7 @@ describe("transformModelInfo — 现有行为锁定", () => {
     expect(transformModelInfo(undefined)).toBeNull();
     expect(
       transformModelInfo([
-        { model_name: "staging/x", model_info: { mode: "chat" } },
+        { model_name: "dup-openai", model_info: { mode: "chat" } },
         { model_name: "embed", model_info: { mode: "embedding" } },
       ]),
     ).toBeNull();
@@ -181,8 +180,8 @@ describe("transformModelInfo — 现有行为锁定", () => {
 });
 
 /**
- * Cycle 2：读 model_info.supports_reasoning（研究 04 的 (a) 判决——47/53 部署有值，
- * 比名字正则更准）。网关显式声明优先于名字正则；缺失时回落正则（覆盖 6 个稀疏模型）。
+ * Cycle 2：读 model_info.supports_reasoning（网关已在部署上声明，比名字正则更准）。
+ * 网关显式声明优先于名字正则；缺失时回落正则（覆盖未声明能力的稀疏模型）。
  */
 describe("transformModelInfo — supports_reasoning 字段", () => {
   it("supports_reasoning=true 覆盖名字正则（名字不匹配也判 true）", () => {
@@ -213,13 +212,13 @@ describe("transformModelInfo — supports_reasoning 字段", () => {
       { model_name: "kimi-k2.7-code", model_info: { supports_reasoning: false } },
       { model_name: "kimi-k2.7-code", model_info: { supports_reasoning: true } },
     ]);
-    // false+true 混合 → false：不能宣传轮询组里某个后端没有的能力（C 项 any→all）
+    // false+true 混合 → false：不能宣传轮询组里某个后端没有的能力（能力聚合 all-true）
     expect(byId(models)["kimi-k2.7-code"].reasoning).toBe(false);
   });
 });
 
 /**
- * Cycle 3：supported_openai_params 奖励信号（研究 04 的 bonus——比名字正则更可靠）。
+ * Cycle 3：supported_openai_params 奖励信号（比名字正则更可靠）。
  * 当 supports_reasoning 缺失（稀疏模型）但网关在 supported_openai_params 里声明了
  * reasoning_effort / thinking 时，判 reasoning=true。优先级：supports_reasoning > params > 正则。
  */
@@ -325,19 +324,24 @@ describe("transformModelInfo — max 思考级别 + adaptive thinking", () => {
 });
 
 describe("fallbackModels", () => {
-  it("所有 fallback 模型声明 max 思考级别 + forceAdaptiveThinking", () => {
-    const models = fallbackModels();
-    expect(models.length).toBeGreaterThan(0);
-    for (const m of models) {
-      expect(m.reasoning).toBe(true);
-      expect(m.thinkingLevelMap).toEqual({ max: "max" });
-      expect(m.compat?.forceAdaptiveThinking).toBe(true);
-    }
+  it("返回实例声明的静态目录副本，不内置任何模型", () => {
+    expect(fallbackModels(testInstance())).toEqual([]);
+    const custom = {
+      id: "example-model",
+      name: "example-model",
+      reasoning: true,
+      input: ["text"] as ("text" | "image")[],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 64000,
+    };
+    const models = fallbackModels(testInstance({ fallbackModels: [custom] }));
+    expect(models).toEqual([custom]);
   });
 });
 
 // ---------------------------------------------------------------------------
-// C 项（balcsida v3.1.0 吸收）：多 deployment 能力聚合 any→all。
+// 多 deployment 能力聚合 any→all。
 // LiteLLM 同名组轮询：vision / reasoning 声明层只在每个可路由 deployment 都解析为
 // 支持时才宣传；显式 false 一票否决。reasoning 保留三态——"未声明混合/全未声明"
 // 是不确定，回落模型级兜底（params / 名字正则），不否决。
@@ -574,7 +578,7 @@ describe("transformModelInfo — reasoning_effort_levels 档位推导", () => {
 });
 
 // ---------------------------------------------------------------------------
-// B 项（balcsida v3.1.0 吸收）：/model/info 成本字段填 model.cost。
+// /model/info 成本字段填 model.cost。
 // 请求前估算（模型选择 UI / 预算控制）此前恒为 0；与响应后口径的
 // x-litellm-response-cost 实付跟踪互补。用例数据取自 2026-09-20 网关实测
 // （moonshotai/kimi-k3、z-ai/glm-5.3 的真实落库值）。
@@ -673,10 +677,17 @@ describe("stampCustomerHeader", () => {
 });
 
 describe("多实例模型目录", () => {
-  it("legacy 无参数保留内置目录，文件实例空数组不回落内置表", () => {
-    expect(fallbackModels()).toHaveLength(11);
-    expect(fallbackModels(testInstance({ fallbackModels: [] }))).toEqual([]);
-    const custom = fallbackModels()[0];
+  it("静态兜底目录按实例隔离（不共享、不内置）", () => {
+    expect(fallbackModels(testInstance())).toEqual([]);
+    const custom = {
+      id: "team-model",
+      name: "team-model",
+      reasoning: false,
+      input: ["text"] as ("text" | "image")[],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 64000,
+    };
     expect(fallbackModels(testInstance({ fallbackModels: [custom] }))).toEqual([custom]);
   });
 

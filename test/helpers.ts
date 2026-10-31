@@ -25,11 +25,11 @@ export function opaqueToken(): string {
 
 export function testInstance(overrides: Partial<InstanceConfig> = {}): InstanceConfig {
   return {
-    providerId: "litellm",
-    displayName: "LiteLLM Gateway",
+    providerId: "litellm-oidc",
+    displayName: "LiteLLM OIDC gateway",
     gatewayBaseUrl: "https://litellm.example.com",
     keycloakBaseUrl: "https://keycloak.example.com",
-    keycloakRealm: "Example",
+    keycloakRealm: "example",
     keycloakClientId: "coding-agent-cli",
     keycloakScope: "openid profile email offline_access",
     modelInfoPath: "/model/info",

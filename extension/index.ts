@@ -112,7 +112,7 @@ export function setupExtension(pi: ExtensionAPI, config: RuntimeConfig): void {
 
       for (const instance of config.instances) {
         lines.push("", `[${instance.providerId}] ${instance.displayName}`);
-        // 模态清单（spec #1 用户故事 19）：getModelsOfType 防御性探测，兼容无此 API 的运行时
+        // 模态清单：getModelsOfType 防御性探测，兼容无此 API 的运行时
         const countOf = (type: string): number => {
           const registry = ctx.modelRegistry as unknown as {
             getModelsOfType?: (type: string, provider?: string) => readonly unknown[];

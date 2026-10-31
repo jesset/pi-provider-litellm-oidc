@@ -31,19 +31,19 @@ function runtimeConfig() {
   return parseConfigFile({
     instances: [
       {
-        id: "litellm",
-        name: "LiteLLM Gateway",
+        id: "litellm-oidc",
+        name: "LiteLLM OIDC gateway",
         gatewayUrl: "https://litellm.example.com",
         keycloakUrl: "https://keycloak.example.com",
-        realm: "Example",
+        realm: "example",
         clientId: "coding-agent-cli",
       },
       {
         id: "staging",
-        name: "Staging Gateway",
+        name: "staging gateway",
         gatewayUrl: "https://gateway.staging.example.com",
         keycloakUrl: "https://sso.staging.example.com",
-        realm: "Staging",
+        realm: "staging",
         clientId: "staging-cli",
         customer: { header: "x-staging-user", claims: ["preferred_username"] },
       },
@@ -57,8 +57,8 @@ describe("多实例扩展装配", () => {
     const { pi, providers, handlers, emit } = fakePi();
     setupExtension(pi, runtimeConfig());
 
-    expect([...providers.keys()]).toEqual(["litellm", "staging"]);
-    expect(providers.get("litellm")?.baseUrl).toBe("https://litellm.example.com");
+    expect([...providers.keys()]).toEqual(["litellm-oidc", "staging"]);
+    expect(providers.get("litellm-oidc")?.baseUrl).toBe("https://litellm.example.com");
     expect(providers.get("staging")?.baseUrl).toBe("https://gateway.staging.example.com");
     expect(providers.get("staging")?.models).toEqual([]);
     expect(handlers.before_provider_headers).toHaveLength(1);
@@ -136,8 +136,8 @@ describe("多实例扩展装配", () => {
       expect(credentials).toMatchObject({ access: "staging-access", refresh: "staging-refresh" });
       expect(deviceCode.userCode).toBe("USER-CODE");
       expect(urls).toEqual([
-        "https://sso.staging.example.com/realms/Staging/protocol/openid-connect/auth/device",
-        "https://sso.staging.example.com/realms/Staging/protocol/openid-connect/token",
+        "https://sso.staging.example.com/realms/staging/protocol/openid-connect/auth/device",
+        "https://sso.staging.example.com/realms/staging/protocol/openid-connect/token",
       ]);
       expect(new URLSearchParams(bodies[0]).get("client_id")).toBe("staging-cli");
       expect(new URLSearchParams(bodies[1]).get("code_verifier")).toBeTruthy();
@@ -146,7 +146,7 @@ describe("多实例扩展装配", () => {
     }
   });
 
-  it("/session-header 汇总配置来源、各实例登录状态与模态清单（spec #1 用户故事 19）", async () => {
+  it("/session-header 汇总配置来源、各实例登录状态与模态清单", async () => {
     const { pi, commands } = fakePi();
     setupExtension(pi, runtimeConfig());
     const notifications: string[] = [];
@@ -155,22 +155,22 @@ describe("多实例扩展装配", () => {
       ui: { notify: (text: string) => notifications.push(text) },
       sessionManager: { getSessionId: () => "session-123" },
       modelRegistry: {
-        getApiKeyForProvider: async (provider: string) => provider === "litellm"
+        getApiKeyForProvider: async (provider: string) => provider === "litellm-oidc"
           ? makeJwt({ email: "cloud@example.com" })
           : makeJwt({ preferred_username: "alice" }),
         getModelsOfType: (type: string, provider: string) =>
-          provider === "litellm" && type === "image"
+          provider === "litellm-oidc" && type === "image"
             ? [{ id: "flux3-klein" }]
-            : provider === "litellm" && type === "classifier"
+            : provider === "litellm-oidc" && type === "classifier"
               ? [{ id: "typesafe/jev-latest" }]
               : [],
       },
     });
     expect(notifications).toHaveLength(1);
     expect(notifications[0]).toContain("配置来源 : file:test");
-    expect(notifications[0]).toContain("[litellm] LiteLLM Gateway");
+    expect(notifications[0]).toContain("[litellm-oidc] LiteLLM OIDC gateway");
     expect(notifications[0]).toContain("cloud@example.com");
-    expect(notifications[0]).toContain("[staging] Staging Gateway");
+    expect(notifications[0]).toContain("[staging] staging gateway");
     expect(notifications[0]).toContain("x-staging-user: alice");
     // 模态清单：litellm 有 1 image + 1 classifier，staging 均 0
     expect(notifications[0]).toContain("image × 1");
@@ -184,7 +184,7 @@ describe("多实例扩展装配", () => {
     const { pi, providers } = fakePi();
     setupExtension(pi, runtimeConfig());
     const storedModel = { id: "stored-model", name: "stored-model", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1000, maxTokens: 100 };
-    const litellm = providers.get("litellm")!;
+    const litellm = providers.get("litellm-oidc")!;
     const staging = providers.get("staging")!;
 
     // phase 1（allowNetwork=false）：各自恢复 stored，绝不打网络；无 stored 时用各自 fallback（文件实例为空）
@@ -209,13 +209,13 @@ describe("多实例扩展装配", () => {
     try {
       globalThis.fetch = (async (input: RequestInfo | URL) => {
         const url = String(input);
-        const models = url.includes("example.com")
-          ? [{ model_name: "litellm-live", model_info: {} }]
-          : [{ model_name: "staging-live", model_info: {} }];
+        const models = url.includes("staging")
+          ? [{ model_name: "staging-live", model_info: {} }]
+          : [{ model_name: "litellm-oidc-live", model_info: {} }];
         return new Response(JSON.stringify({ data: models }), { status: 200 });
       }) as typeof fetch;
 
-      for (const [id, provider] of [["litellm", litellm], ["staging", staging]] as const) {
+      for (const [id, provider] of [["litellm-oidc", litellm], ["staging", staging]] as const) {
         const published: unknown[] = [];
         const result = await provider.refreshModels!({
           allowNetwork: true,
@@ -230,7 +230,7 @@ describe("多实例扩展装配", () => {
         expect(published).toHaveLength(1);
         persistCalls.push({ models: (published[0] as any).models, publish: publication => Promise.resolve(true) });
       }
-      expect(persistCalls[0].models.map((m: any) => m.id)).toEqual(["litellm-live"]);
+      expect(persistCalls[0].models.map((m: any) => m.id)).toEqual(["litellm-oidc-live"]);
       expect(persistCalls[1].models.map((m: any) => m.id)).toEqual(["staging-live"]);
     } finally {
       globalThis.fetch = realFetch;

@@ -3,7 +3,7 @@ import { refreshAccessToken } from "../extension/keycloak.ts";
 import { testInstance } from "./helpers.ts";
 
 /**
- * A 项（balcsida v3.1.0 吸收）：refresh 瞬态失败 backoff。
+ * refresh 瞬态失败 backoff。
  * Keycloak 瞬断/限流时，pi credential lock 后排队的刷新调用会形成惊群（每次都
  * 再请求一次 token endpoint）；5s backoff 窗口内直接返回未过期的旧 credentials。
  * 按 refresh token keyed（一个凭证的失败不拖累另一个）；仅 transient（fetch /
@@ -119,13 +119,13 @@ describe("refreshAccessToken — transient backoff", () => {
     const staging = testInstance({
       providerId: "staging",
       keycloakBaseUrl: "https://sso.staging.example.com/",
-      keycloakRealm: "Staging",
+      keycloakRealm: "staging",
     });
     respond = success;
     await expect(refreshAccessToken(staging, creds("rt-shared"), signal)).resolves.toMatchObject({ access: "new-access" });
     expect(fetchCalls).toBe(2);
-    expect(requestedUrls[0]).toBe("https://keycloak.example.com/realms/Example/protocol/openid-connect/token");
-    expect(requestedUrls[1]).toBe("https://sso.staging.example.com/realms/Staging/protocol/openid-connect/token");
+    expect(requestedUrls[0]).toBe("https://keycloak.example.com/realms/example/protocol/openid-connect/token");
+    expect(requestedUrls[1]).toBe("https://sso.staging.example.com/realms/staging/protocol/openid-connect/token");
   });
 
   it("backoff 窗口内旧 token 恰好过期：不再返回旧凭证（宁可重试）", async () => {

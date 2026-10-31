@@ -22,7 +22,7 @@ function reader(files: Record<string, string>) {
   };
 }
 
-function instance(id = "litellm") {
+function instance(id = "litellm-oidc") {
   return {
     id,
     name: `${id} Gateway`,
@@ -34,7 +34,7 @@ function instance(id = "litellm") {
 }
 
 function document() {
-  return { instances: [instance("litellm"), instance("staging")] };
+  return { instances: [instance("litellm-oidc"), instance("staging")] };
 }
 
 function json(value: unknown): string {
@@ -71,21 +71,34 @@ describe("assertSecureUrl", () => {
 });
 
 describe("legacy env 单实例", () => {
-  it("无配置文件时保持 LiteLLM 默认值与内置 fallback 语义", () => {
+  it("无配置文件且未设置环境变量时 fail-fast，不提供部署默认值", () => {
     const files = reader({});
-    const config = loadRuntimeConfig({}, files.read, NODE, HOME);
+    expect(() => loadRuntimeConfig({}, files.read, NODE, HOME)).toThrow(/缺少必需环境变量: LITELLM_OIDC_PROVIDER_ID, LITELLM_OIDC_GATEWAY_URL/);
+    expect(files.calls).toEqual([PI_DEFAULT]);
+  });
+
+  it("环境变量齐全时定义单实例，displayName 缺省回退 providerId", () => {
+    const files = reader({});
+    const config = loadRuntimeConfig({
+      LITELLM_OIDC_PROVIDER_ID: "litellm-oidc",
+      LITELLM_OIDC_GATEWAY_URL: "https://litellm.example.com",
+      LITELLM_OIDC_KEYCLOAK_URL: "https://keycloak.example.com",
+      LITELLM_OIDC_KEYCLOAK_REALM: "example",
+      LITELLM_OIDC_KEYCLOAK_CLIENT_ID: "coding-agent-cli",
+    }, files.read, NODE, HOME);
     expect(config.source).toBe("legacy-env");
     expect(config.instances).toHaveLength(1);
     expect(config.instances[0]).toMatchObject({
-      providerId: "litellm",
-      displayName: "LiteLLM Gateway",
+      providerId: "litellm-oidc",
+      displayName: "litellm-oidc",
       gatewayBaseUrl: "https://litellm.example.com",
       keycloakBaseUrl: "https://keycloak.example.com",
-      keycloakRealm: "Example",
+      keycloakRealm: "example",
       keycloakClientId: "coding-agent-cli",
       modelInfoPath: "/model/info",
     });
-    expect(config.instances[0].fallbackModels).toBeUndefined();
+    // 内置静态目录已移除：legacy 实例的兜底目录恒为空，离线时以 /model/info 为准
+    expect(config.instances[0].fallbackModels).toEqual([]);
     expect(config.session.header).toBe("x-litellm-trace-id");
     expect(config.customer.claims).toEqual(["email"]);
     expect(config.cost).toEqual({ enabled: true, header: "x-litellm-response-cost" });
@@ -124,7 +137,13 @@ describe("legacy env 单实例", () => {
   });
 
   it("legacy URL 仍在加载时强制 HTTPS", () => {
-    expect(() => loadRuntimeConfig({ LITELLM_OIDC_GATEWAY_URL: "http://insecure.example.com" }, reader({}).read, NODE, HOME))
+    expect(() => loadRuntimeConfig({
+      LITELLM_OIDC_PROVIDER_ID: "litellm-oidc",
+      LITELLM_OIDC_GATEWAY_URL: "http://insecure.example.com",
+      LITELLM_OIDC_KEYCLOAK_URL: "https://keycloak.example.com",
+      LITELLM_OIDC_KEYCLOAK_REALM: "example",
+      LITELLM_OIDC_KEYCLOAK_CLIENT_ID: "coding-agent-cli",
+    }, reader({}).read, NODE, HOME))
       .toThrow(/LITELLM_OIDC_GATEWAY_URL/);
   });
 });
@@ -138,7 +157,7 @@ describe("配置文件发现", () => {
       PI_CODING_AGENT_DIR: "/agent",
     }, files.read, NODE, HOME);
     expect(config.source).toBe("file:/config/instances.json");
-    expect(config.instances.map((entry) => entry.providerId)).toEqual(["litellm", "staging"]);
+    expect(config.instances.map((entry) => entry.providerId)).toEqual(["litellm-oidc", "staging"]);
     expect(files.calls).toEqual(["/config/instances.json"]);
   });
 

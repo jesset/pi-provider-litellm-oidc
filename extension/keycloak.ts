@@ -193,7 +193,7 @@ export async function loginDeviceFlow(instance: InstanceConfig, callbacks: Login
 }
 
 /**
- * refresh 瞬态失败 backoff（吸收自 balcsida v3.1.0）。Keycloak 瞬断 / 限流时，
+ * refresh 瞬态失败 backoff。Keycloak 瞬断 / 限流时，
  * pi credential lock 后排队的刷新调用会形成惊群（每次都再打一次 token
  * endpoint）——5s 窗口内直接返回未过期的旧 credentials 避免惊群。按 refresh
  * token keyed（一个凭证的失败不拖累另一个）；仅 transient（postForm 的 fetch /

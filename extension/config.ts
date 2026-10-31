@@ -36,8 +36,8 @@ export interface InstanceConfig {
    * 支持的场景（错误宣传的代价是 assets 被 drop_params 静默剥离后返回错误答案，慎用）。
    */
   imageClassifiers?: string[];
-  /** undefined 仅在 legacy env 模式出现，表示沿用内置 LiteLLM 目录。 */
-  fallbackModels?: ProviderModelConfig[];
+  /** 静态兜底目录（缺省空数组）：/model/info 不可用且无持久化目录时使用。 */
+  fallbackModels: ProviderModelConfig[];
 }
 
 export interface RuntimeConfig {
@@ -113,18 +113,47 @@ function costFromEnv(env: NodeJS.ProcessEnv): CostConfig {
   };
 }
 
+/**
+ * legacy env 单实例的必需变量。不提供任何部署默认值：网关地址、realm、client 属于
+ * 部署方而非扩展，缺失时直接引导用户提供配置文件或完整环境变量。
+ */
+const REQUIRED_LEGACY_ENV = [
+  "LITELLM_OIDC_PROVIDER_ID",
+  "LITELLM_OIDC_GATEWAY_URL",
+  "LITELLM_OIDC_KEYCLOAK_URL",
+  "LITELLM_OIDC_KEYCLOAK_REALM",
+  "LITELLM_OIDC_KEYCLOAK_CLIENT_ID",
+] as const;
+
 function legacyConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
+  const missing = REQUIRED_LEGACY_ENV.filter((name) => !env[name]?.trim());
+  if (missing.length > 0) {
+    throw new Error(
+      `未发现配置文件，且缺少必需环境变量: ${missing.join(", ")}。\n` +
+        "请任选一种配置方式：\n" +
+        "  1) 写 ~/.pi/agent/litellm-oidc.json（instances[]，见 README「配置文件」）；\n" +
+        "  2) 用 LITELLM_OIDC_CONFIG 指向配置文件；\n" +
+        "  3) 设置完整环境变量，例如：\n" +
+        "     LITELLM_OIDC_PROVIDER_ID=my-gateway \\\n" +
+        "     LITELLM_OIDC_GATEWAY_URL=https://litellm.example.com \\\n" +
+        "     LITELLM_OIDC_KEYCLOAK_URL=https://keycloak.example.com \\\n" +
+        "     LITELLM_OIDC_KEYCLOAK_REALM=myrealm \\\n" +
+        "     LITELLM_OIDC_KEYCLOAK_CLIENT_ID=my-client",
+    );
+  }
   const customer = customerFromEnv(env);
+  const providerId = envValue(env, "LITELLM_OIDC_PROVIDER_ID", "");
   const instance: InstanceConfig = {
-    providerId: envValue(env, "LITELLM_OIDC_PROVIDER_ID", "litellm"),
-    displayName: envValue(env, "LITELLM_OIDC_DISPLAY_NAME", "LiteLLM Gateway"),
-    gatewayBaseUrl: envValue(env, "LITELLM_OIDC_GATEWAY_URL", "https://litellm.example.com"),
-    keycloakBaseUrl: envValue(env, "LITELLM_OIDC_KEYCLOAK_URL", "https://keycloak.example.com"),
-    keycloakRealm: envValue(env, "LITELLM_OIDC_KEYCLOAK_REALM", "Example"),
-    keycloakClientId: envValue(env, "LITELLM_OIDC_KEYCLOAK_CLIENT_ID", "coding-agent-cli"),
+    providerId,
+    displayName: envValue(env, "LITELLM_OIDC_DISPLAY_NAME", providerId),
+    gatewayBaseUrl: envValue(env, "LITELLM_OIDC_GATEWAY_URL", ""),
+    keycloakBaseUrl: envValue(env, "LITELLM_OIDC_KEYCLOAK_URL", ""),
+    keycloakRealm: envValue(env, "LITELLM_OIDC_KEYCLOAK_REALM", ""),
+    keycloakClientId: envValue(env, "LITELLM_OIDC_KEYCLOAK_CLIENT_ID", ""),
     keycloakScope: envValue(env, "LITELLM_OIDC_KEYCLOAK_SCOPE", DEFAULT_SCOPE),
     modelInfoPath: "/model/info",
     customer,
+    fallbackModels: [],
   };
   assertSecureUrl("LITELLM_OIDC_GATEWAY_URL", instance.gatewayBaseUrl);
   assertSecureUrl("LITELLM_OIDC_KEYCLOAK_URL", instance.keycloakBaseUrl);

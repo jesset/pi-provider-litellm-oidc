@@ -7,7 +7,7 @@ import type { InstanceConfig } from "./config.ts";
  *
  * - 全 text 输入 → `POST {gateway}/images/generations`（JSON：model/prompt/n/size，
  *   response_format:"b64_json"）；输入含 image block → `POST {gateway}/images/edits`
- *   （multipart form，OpenAI 兼容；spec #1：无真实 image_edit 部署可验证，按协议实现）。
+ *   （multipart form，OpenAI 兼容；无真实 image_edit 部署可验证，按协议实现）。
  * - size/n/quality 经 options.metadata 透传（pi 对该字段的官方契约即参数透传通道）；
  *   size 默认 1024x1024（t2i 网关实测需要显式 size），n 默认 1。
  * - 响应 data[] 每项：b64_json 直出；缺失时回落下载 url（content-type 推断 mimeType）。
