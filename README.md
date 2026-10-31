@@ -45,24 +45,18 @@ pi install npm:pi-provider-litellm-oidc
 omp install npm:pi-provider-litellm-oidc
 ```
 
-The npm channel ships the minified single-file artifact (`dist/index.js`), not the TypeScript sources.
-
 ### git source
 
 ```bash
-# the scp shorthand requires the git@ prefix, otherwise pi treats the spec as a local path
-pi install git:git@github.com:jesset/pi-provider-litellm-oidc.git@v0.13.0
+pi install git:git@github.com:jesset/pi-provider-litellm-oidc.git
 ```
 
-> A git install clones the full source and builds `dist` locally through the `prepare` hook (Node ≥ 22 and a reachable npm registry for esbuild are required). You get the sources; tamper resistance only exists on the npm channel, so npm is recommended for end users.
-
-### Local directory
+### Local directory (development)
 
 ```bash
 git clone https://github.com/jesset/pi-provider-litellm-oidc.git
 cd pi-provider-litellm-oidc
 npm install --no-audit --no-fund   # the prepare hook builds dist/index.js
-./install.sh                       # pi install <local directory>
 ```
 
 For an already running Pi session, use `/reload` to hot-reload the extension.

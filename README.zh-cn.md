@@ -1,6 +1,6 @@
 # pi-provider-litellm-oidc
 
-> 英文版（主）：[README.md](README.md)
+> 英文版：[README.md](README.md)
 
 Pi coding agent 通过 Keycloak OIDC 免密钥（keyless）接入 LiteLLM 网关的 provider 扩展：经 Device Authorization Flow（RFC 8628）取得 JWT，以 `Authorization: Bearer` 调用网关的 Anthropic 协议端点 `/v1/messages`，全程无静态 API Key。一套代码同时适配 [pi](https://github.com/earendil-works/pi) 与 omp（oh-my-pi）。
 
@@ -45,24 +45,18 @@ pi install npm:pi-provider-litellm-oidc
 omp install npm:pi-provider-litellm-oidc
 ```
 
-npm 通道拿到的是 minified 单文件产物（`dist/index.js`），不含 TS 源码。
-
 ### git 源
 
 ```bash
-# scp 简写必须带 git@，否则 Pi 会把 spec 当成本地路径
-pi install git:git@github.com:jesset/pi-provider-litellm-oidc.git@v0.13.0
+pi install git:git@github.com:jesset/pi-provider-litellm-oidc.git
 ```
 
-> git 源安装会在本机 clone 完整源码并经 `prepare` 钩子现场构建 dist（需 Node ≥ 22 与可达 npm registry 拉 esbuild）——拿到的是源码，防篡改保护只存在于 npm 通道；对普通用户推荐 npm 方式。
-
-### 本地目录
+### 本地目录(开发)
 
 ```bash
 git clone https://github.com/jesset/pi-provider-litellm-oidc.git
 cd pi-provider-litellm-oidc
 npm install --no-audit --no-fund   # prepare 会构建 dist/index.js
-./install.sh                       # pi install <本地目录>
 ```
 
 已运行中的 Pi 会话用 `/reload` 热加载。
