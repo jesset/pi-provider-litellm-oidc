@@ -61,7 +61,7 @@ if (lock) {
 
 // 5. tarball 文件白名单（精确到文件名）
 // 注意：npm 10 实测 pack --ignore-scripts 仍会执行 prepare（idempotent 重建 dist，无害）
-const ALLOWED_FILES = new Set(["LICENSE", "README.md", "dist/index.js", "package.json"]);
+const ALLOWED_FILES = new Set(["LICENSE", "README.md", "README.zh-cn.md", "dist/index.js", "package.json"]);
 const packOut = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
   encoding: "utf8",
   stdio: ["ignore", "pipe", "inherit"],

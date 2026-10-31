@@ -1,67 +1,67 @@
 # pi-provider-litellm-oidc
 
-Pi coding agent 的 keyless OIDC provider 扩展：经 Keycloak Device Flow 取 JWT 调用 LiteLLM 网关的 Anthropic 协议端点，模型目录与思考档位以网关声明为权威。本文件是域语言术语表；设计决策见 `docs/adr/`。
+A keyless OIDC provider extension for the pi coding agent: it obtains a JWT through the Keycloak Device Flow and calls a LiteLLM gateway's Anthropic-protocol endpoint, with the gateway as the authority for the model catalog and thinking levels. This file is the domain vocabulary; design decisions live in `docs/adr/`.
 
 ## Language
 
-### 网关侧
+### Gateway side
 
-**Deployment**：
-`/model/info` 的一行——一个实际可路由的后端实例及其 model_info 实配。
-_Avoid_: 后端、节点
+**Deployment**:
+One row of `/model/info` — an actually routable backend instance together with its configured `model_info`.
+_Avoid_: backend, node
 
-**模型组（model group）**：
-同名 deployment 的聚合，LiteLLM 按它轮询；一切能力聚合的单位（vision all-true、reasoning 一票否决、档位取交集）。
-_Avoid_: 模型（指轮询单位时）
+**Model group**:
+The aggregate of same-name deployments, which LiteLLM round-robins; the unit for every capability aggregation (vision all-true, reasoning veto, level intersection).
+_Avoid_: model (when referring to the round-robin unit)
 
-**档位（effort levels）**：
-网关 `reasoning_effort_levels` 声明的思考档集，取值为 LiteLLM `REASONING_EFFORT` 七值：`none/minimal/low/medium/high/xhigh/max`。
-_Avoid_: effort 档、推理级别
+**Effort levels**:
+The thinking level set declared by the gateway's `reasoning_effort_levels`, using LiteLLM's `REASONING_EFFORT` values: `none/minimal/low/medium/high/xhigh/max`.
+_Avoid_: effort tiers, reasoning grades
 
-### 接入与配置
+### Access and configuration
 
-**Instance（实例）**：
-一套 LiteLLM 网关及其 Keycloak realm/client 的接入配置；一个实例注册为一个 Pi provider。
-_Avoid_: provider（指配置单元时）、站点、部署实例
+**Instance**:
+The access configuration for one LiteLLM gateway plus its Keycloak realm/client; an instance registers as one Pi provider.
+_Avoid_: provider (when referring to the configuration unit), site, deployment instance
 
-**Pi provider**：
-Pi 运行时注册与选择模型的单元（`/login <id>`、`--model <id>/<model>` 的前缀），凭据与模型目录以它为键。
-_Avoid_: instance（指 Pi 注册单元时）
+**Pi provider**:
+The unit by which the Pi runtime registers and selects models (the prefix of `/login <id>` and `--model <id>/<model>`); credentials and model catalogs are keyed by it.
+_Avoid_: instance (when referring to the Pi registration unit)
 
-### pi 侧
+### Pi side
 
-**思考级别（thinking level）**：
-pi 思考菜单的七档：`off/minimal/low/medium/high/xhigh/max`。与档位一一对应，唯一命名差异是 `none`↔`off`。
-_Avoid_: 档位（指 pi 菜单时）
+**Thinking level**:
+One of the seven levels in pi's thinking menu: `off/minimal/low/medium/high/xhigh/max`. It maps one-to-one to effort levels, the only naming difference being `none` ↔ `off`.
+_Avoid_: effort level (when referring to the pi menu)
 
-**菜单排除（null exclusion）**：
-`thinkingLevelMap` 中值为 `null` 的档从菜单移除——pi 的通用机制，非 off 专属。
-_Avoid_: off-null 陷阱（专指无据盲用的反面案例）
+**Null exclusion**:
+A `thinkingLevelMap` entry with value `null` removes that level from the menu — a generic pi mechanism, not off-specific.
+_Avoid_: off-null trap (which refers specifically to the flawed unconditional case)
 
-### 映射与兜底
+### Mapping and fallback
 
-**精确对齐（exact alignment）**：
-网关已声明档位时，菜单与档集一一映射：档集内直传自身 effort 值，档集外显式排除，未知档名忽略。
-_Avoid_: 近似对齐
+**Exact alignment**:
+When the gateway declares levels, the menu maps one-to-one onto the declared set: levels inside pass their own effort through, levels outside are explicitly excluded, unknown level names are ignored.
+_Avoid_: approximate alignment
 
-**档位兜底（level fallback）**：
-网关未声明档位（或同名组交集为空）时的默认菜单行为：仅显式声明 max，其余默认档可选（v0.8.0 起行为）。
-_Avoid_: hack 兜底
+**Level fallback**:
+The default menu behavior when the gateway declares no levels (or the intersection across a model group is empty): declare max explicitly and leave the other default levels selectable (behavior since v0.8.0).
+_Avoid_: hack fallback
 
-**静态兜底目录（fallback catalog）**：
-`/model/info` 不可用时使用的静态模型目录，只用于离线/失败兜底；模型能力仍以网关声明为权威。
-_Avoid_: 模型清单（指能力声明时）
+**Fallback catalog**:
+The static model catalog used when `/model/info` is unavailable; it only serves offline/failure fallback, while capabilities remain governed by the gateway declaration.
+_Avoid_: model list (when referring to capability declaration)
 
-**网关声明权威（gateway authority）**：
-模型能力以网关 model_info 为唯一权威，客户端不修补权威数据——网关误配直接反映到用户菜单。
-_Avoid_: 客户端纠错
+**Gateway authority**:
+Model capabilities come solely from the gateway's `model_info`; the client does not patch authoritative data — a gateway misconfiguration surfaces directly in the user menu.
+_Avoid_: client-side correction
 
-### 非 chat 模态
+### Non-chat modalities
 
-**模态分流（mode routing）**：
-`/model/info` 的 deployment mode 到 pi ModelType 的映射：image_generation/image_edit → image、decisions/evaluation → classifier、名单内其余非 chat mode → 剔除。网关部署什么模态客户端即暴露什么。
-_Avoid_: 模型过滤（指 image/decisions 分流时）
+**Mode routing**:
+The mapping from a deployment `mode` in `/model/info` to a pi ModelType: image_generation/image_edit → image, decisions/evaluation → classifier, other non-chat modes on the exclusion list → dropped. Whatever the gateway deploys is what the client exposes.
+_Avoid_: model filtering (when referring to image/decisions routing)
 
-**System One wire**：
-`/v1/systemone` 端点的请求/响应格式（state + questions map，type ∈ noul/choice/score），pi 侧 bool 与 wire noul 双向映射。与 OpenAI Decisions 格式（/v1/decisions）由 LiteLLM 双向翻译，格式选择不影响模型可用性。
-_Avoid_: decisions 协议（指 System One 格式时）
+**System One wire**:
+The request/response format of the `/v1/systemone` endpoint (state + questions map, type ∈ noul/choice/score), with pi's bool mapped to and from the wire's noul. LiteLLM translates between it and the OpenAI Decisions format (`/v1/decisions`), so the format choice does not affect model availability.
+_Avoid_: decisions protocol (when referring to the System One format)

@@ -1,38 +1,38 @@
 # CLAUDE.md
 
-本仓库的 Claude Code / pi 工作指引。领域术语见 `CONTEXT.md`，设计取舍见 `docs/adr/`。
+Working guide for Claude Code / pi in this repository. Domain vocabulary lives in `CONTEXT.md`; design decisions live in `docs/adr/`.
 
-## 项目概述
+## Project overview
 
-pi-provider-litellm-oidc：pi coding agent 的 keyless OIDC provider 扩展。通过 Keycloak Device Authorization Flow（RFC 8628，含 PKCE）获取 JWT，以 `Authorization: Bearer` 调用 LiteLLM 网关的 Anthropic 协议端点 `/v1/messages`，全程无静态 API Key。同时适配 pi 与 omp（oh-my-pi）两套运行时。
+pi-provider-litellm-oidc is a keyless OIDC provider extension for the pi coding agent. It obtains a JWT through the Keycloak Device Authorization Flow (RFC 8628, with PKCE) and calls the LiteLLM gateway's Anthropic-protocol endpoint `/v1/messages` with `Authorization: Bearer`. No static API key is involved. The extension supports both pi and omp (oh-my-pi).
 
-**扩展不内置任何部署默认值**：网关地址、realm、client、provider ID 与静态模型目录全部由部署方提供。
+**The extension ships no deployment defaults**: gateway URL, realm, client, provider ID and static model catalog are all supplied by the deployment.
 
-## 关键设计决策
+## Key design decisions
 
-- **构建产物即发布物**：`extension/*.ts` 经 esbuild bundle + minify 为单文件 `dist/index.js`（`build.mjs`，`npm run build`），`pi.extensions` 指向它，`files` 仅含 `dist`——TS 源码不进 npm tarball。`dist/` 不进仓库：npm 发布由 GitHub Actions 在 `v*` tag 上构建后 `npm publish --provenance`；git 源安装在本机经 `prepare` 钩子构建（pi 的 git 安装执行 `npm install --omit=dev`，prepare 以 `--include=dev` 显式覆盖 `npm_config_omit=dev` 临时装 pinned esbuild）。目的是避免客户端修改源码篡改 header 注入等行为（仅提高门槛——git 源安装拿到的仍是完整源码）
-- **零运行时依赖**：Device Flow / refresh 只用标准 `fetch` + `URLSearchParams`；esbuild 仅为 devDependency。pi 内置包（`@earendil-works/pi-ai`、`pi-coding-agent`）为 optional peerDependencies，esbuild 以 external 处理（只有类型导入，值导入会构建失败）
-- **配置两种载体**：未发现配置文件时，`LITELLM_OIDC_*` 定义单个实例（必需变量缺失即 fail-fast）；多实例使用 JSON `instances[]`，发现顺序为显式 `LITELLM_OIDC_CONFIG` > `$PI_CODING_AGENT_DIR/litellm-oidc.json` > 运行时默认（pi `~/.pi/agent`；omp 按 `PI_CONFIG_DIR`/profile 推导，默认 `~/.omp/agent`）。文件存在时完全取代 env 实例配置。`extension/config.ts` 统一归一化为 `InstanceConfig[]`，每个实例独立注册 provider。严格 schema 校验：未知字段、必填缺失、重复/非法 provider ID、pi+omp 内置 registry 冲突、非 HTTPS URL 均加载期失败
-- **认证生命周期交给框架**：凭据持久化、过期前 5 分钟自动 `refreshToken`、并发锁都由 Pi 管理；扩展只实现 `login` / `refreshToken` / `getApiKey`，不自建缓存或定时器。Keycloak refresh token 轮换返回的新 refresh token 必须完整回传（`toCredentials`），漏存会导致下次刷新失败
-- **refresh 瞬态失败 backoff**：`refreshAccessToken` 按实例 + refresh token keyed 记 5s backoff 窗口，避免 Keycloak 瞬断时的刷新惊群；仅 transient 异常记录，OAuth 语义错误（如 `invalid_grant`）照抛强制重登，旧 token 已过期不 backoff
-- **HTTPS 强制**：`assertSecureUrl` 校验网关/Keycloak/模型级 baseUrl 为 https（loopback 例外），防 JWT 与 refresh token 明文过线
-- **模型目录三层策略**：静态兜底（各实例 `fallbackModels`，缺省为空）+ 网络刷新（`/model/info`，需网关列入 `public_routes`）+ `context.publish({ persist })` 持久化恢复。`refreshModels` 严格遵守两阶段协议：`allowNetwork=false` 绝不打网络。**不用 `/v1/models`**：其 mode/max_tokens 来自 LiteLLM 静态 cost map 按公开名查找，自研/别名模型一律缺失，`/model/info` 才是 deployment 级 DB 实配值。abort 用 `AbortSignal.any([context.signal, 本地 15s 超时])`
-- **过滤与聚合**：剔除 mode 显式为 embedding/rerank/audio_*/video/realtime/batch/ocr 的条目（mode 缺失不排除）；隐藏 `-openai` 后缀（OpenAI 协议腿孪生）；同名多 deployment 聚合（标量取首个非空、成本取 max 上界）。能力聚合 all-true：vision 需全部 deployment 显式 true，reasoning 任一显式 false 一票否决
-- **思考档位**：`getSupportedThinkingLevels` 对 `xhigh`/`max` 要求 `thinkingLevelMap` 显式声明，且 `mapped === null` 是通用菜单排除机制。`resolveEffortLevels` 读网关 `reasoning_effort_levels`（同名组取交集）或 `supports_{xhigh,max}_reasoning_effort`：有档位 → 菜单精确对齐（档集内直传自身 effort，档集外默认档以 `null` 排除，网关 `none` 即 off；交集为空视同未声明）；无档位 → `{ max: "max" }` 档位兜底。`compat.forceAdaptiveThinking` 对全部推理模型保留——effort 只能经 adaptive 分支的 `output_config.effort` 传递，budget 路径无法表达档位枚举
-- **session / customer 标识注入**（仅 pi）：`before_provider_headers` 按 `ctx.model.provider` 过滤，只对已注册实例注入 `x-litellm-trace-id`（会话聚合，写入 SpendLogs.session_id）与 `x-litellm-customer-id`（用户归因）。customer 值从最终请求头的 `Authorization: Bearer` 解 JWT claim（不验签，只镜像同一 token 的 claim）。**customer 头双通道**：`oauth.modifyModels` 把 header stamp 进 `model.headers`，覆盖绕过会话钩子的裸 `streamSimple` 调用；session 头只走钩子（会话级概念不属于模型）
-- **成本可观测性**（pi + omp）：`after_provider_response` 存 `x-litellm-response-cost` 到按 provider 隔离的 pending slot（无成本头清 slot），`message_end` 按 token 比例摊入 `message.usage.cost`。纯函数 `parseResponseCost` / `attributeCost`
-- **非 chat 模态**：`/model/info` 的 mode 数据驱动分流——`image_generation`/`image_edit` → pi `type:"image"`；`decisions`/`evaluation` → `type:"classifier"`。两个 API 实现必须经 `ProviderConfig` 显式注册：`litellm-images`（`/v1/images/generations` JSON 或 `/v1/images/edits` multipart）与 `litellm-decisions`（System One wire `/v1/systemone`，bool↔noul）。认证用框架注入的 `options.apiKey`，customer 头经 model.headers stamp 生效，session 头不注入。错误不 throw，返回带 `stopReason: error` 的结果形状
-- **双运行时兼容**：pi 与 omp 都以 legacy `OAuthLoginCallbacks` 调用 `oauth.login`，但 omp 的回调对象缺 `onDeviceCode`/`onSelect`。设备码展示按能力三级探测：`onDeviceCode` → `onAuth`（verificationUri 作 URL、userCode 写入 instructions）→ `notify({type:"device_code"})`。用 `typeof === "function"` 运行时探测，不依赖框架类型声明
+- **The build output is the distribution**: `extension/*.ts` is bundled and minified by esbuild into a single `dist/index.js` (`build.mjs`, `npm run build`); `pi.extensions` points at it and `files` contains only `dist`, so TypeScript sources never enter the npm tarball. `dist/` is not committed: GitHub Actions builds it on `v*` tags and publishes with `npm publish --provenance`; git installs build locally through the `prepare` hook (pi runs `npm install --omit=dev`, so prepare overrides `npm_config_omit=dev` with `--include=dev` to install a pinned esbuild temporarily). The goal is to stop clients from editing the source to tamper with header injection (this only raises the bar — a git install still gets the full source)
+- **Zero runtime dependencies**: Device Flow and refresh use only standard `fetch` + `URLSearchParams`; esbuild is a devDependency. The pi packages (`@earendil-works/pi-ai`, `pi-coding-agent`) are optional peerDependencies treated as esbuild externals (type-only imports; any value import would break the build)
+- **Two configuration carriers**: without a config file, `LITELLM_OIDC_*` defines a single instance (fail-fast when required variables are missing); multiple instances use JSON `instances[]`, discovered as explicit `LITELLM_OIDC_CONFIG` > `$PI_CODING_AGENT_DIR/litellm-oidc.json` > runtime default (pi `~/.pi/agent`; omp derived from `PI_CONFIG_DIR`/profile, default `~/.omp/agent`). A config file fully replaces env instance config. `extension/config.ts` normalizes everything into `InstanceConfig[]` and each instance registers its own provider. Strict schema: unknown fields, missing required fields, duplicate/invalid provider IDs, collisions with the pi+omp built-in registries, and non-HTTPS URLs all fail at load time
+- **The framework owns the auth lifecycle**: credential persistence, pre-expiry refresh (5-minute window) and concurrency locks are all managed by Pi; the extension only implements `login` / `refreshToken` / `getApiKey` and keeps no cache or timers. Keycloak refresh-token rotation must return the new refresh token intact (`toCredentials`) — dropping it breaks the next refresh
+- **Backoff for transient refresh failures**: `refreshAccessToken` keeps a 5-second backoff window keyed by instance + refresh token to prevent a refresh stampede during a Keycloak blip. Only transient errors are recorded; OAuth semantic errors such as `invalid_grant` are rethrown to force re-login, and expired tokens are not backed off
+- **HTTPS enforcement**: `assertSecureUrl` validates gateway, Keycloak and model-level baseUrl as https (loopback exempt), keeping JWTs and refresh tokens off plaintext connections
+- **Three-tier model catalog**: per-instance static fallback (`fallbackModels`, empty by default) + network refresh (`/model/info`, which the gateway must list in `public_routes`) + persistence via `context.publish({ persist })`. `refreshModels` follows the two-phase protocol strictly: `allowNetwork=false` never touches the network. **`/v1/models` is not used**: it derives mode/max_tokens from LiteLLM's static cost map keyed by public model name, so self-hosted and alias models are missing; `/model/info` returns deployment-level DB values. Abort uses `AbortSignal.any([context.signal, local 15s timeout])`
+- **Filtering and aggregation**: drop entries whose mode is explicitly embedding/rerank/audio_*/video/realtime/batch/ocr (a missing mode is not used for exclusion); hide the `-openai` suffix (OpenAI protocol-leg twin); aggregate same-name deployments (first non-empty scalar, max for cost as an upper bound). Capabilities aggregate all-true: vision requires every deployment to declare true; reasoning uses any-explicit-false veto
+- **Thinking levels**: `getSupportedThinkingLevels` requires an explicit `thinkingLevelMap` declaration for `xhigh`/`max`, and `mapped === null` is a generic menu exclusion. `resolveEffortLevels` reads the gateway's `reasoning_effort_levels` (intersected across same-name deployments) or `supports_{xhigh,max}_reasoning_effort`: with levels, the menu mirrors the set exactly (levels inside pass their own effort through, default levels outside are excluded with `null`, the gateway's `none` is off; an empty intersection counts as undeclared); without levels, the `{ max: "max" }` fallback applies. `compat.forceAdaptiveThinking` is kept for every reasoning model — effort can only travel through the adaptive branch's `output_config.effort`, since the budget path cannot express level enums
+- **Session / customer identity injection** (pi only): `before_provider_headers` filters by `ctx.model.provider` and injects `x-litellm-trace-id` (session aggregation, stored in SpendLogs.session_id) and `x-litellm-customer-id` (user attribution) into registered instances only. The customer value is decoded from the JWT in the final request's `Authorization: Bearer` header (no signature verification — it only mirrors a claim of the same token). **Two channels for the customer header**: `oauth.modifyModels` stamps it into `model.headers`, covering raw `streamSimple` calls that bypass the session hook; the session header stays hook-only (a session id is not a model property)
+- **Cost observability** (pi + omp): `after_provider_response` stores `x-litellm-response-cost` in a per-provider pending slot (a headerless response clears it), and `message_end` distributes it into `message.usage.cost` by token ratio. Pure functions: `parseResponseCost` / `attributeCost`
+- **Non-chat modalities**: `/model/info` mode drives routing — `image_generation`/`image_edit` → pi `type:"image"`; `decisions`/`evaluation` → `type:"classifier"`. Both API implementations must be registered explicitly on `ProviderConfig`: `litellm-images` (`/v1/images/generations` JSON or `/v1/images/edits` multipart) and `litellm-decisions` (System One wire `/v1/systemone`, bool↔noul). Authentication uses the framework-injected `options.apiKey`; the customer header arrives through the model.headers stamp; the session header is not injected. Errors never throw — they return a result shape with `stopReason: error`
+- **Dual-runtime compatibility**: pi and omp both call `oauth.login` with legacy `OAuthLoginCallbacks`, but omp's callback object lacks `onDeviceCode`/`onSelect`. Device-code display probes three tiers: `onDeviceCode` → `onAuth` (verificationUri as URL, userCode in instructions) → `notify({type:"device_code"})`. Detection uses runtime `typeof === "function"` checks rather than framework type declarations
 
-## 开发流程
+## Development workflow
 
 ```bash
-npm install --no-audit --no-fund   # 装 esbuild，prepare 自动构建一次
+npm install --no-audit --no-fund   # installs esbuild; prepare builds once
 npm run build                      # bundle + minify → dist/index.js
-bun test                           # 单元测试（bun 原生跑 .ts，零依赖）
-npm run supply-chain:guard         # 发布物结构不变量检查（需先 build）
+bun test                           # unit tests (bun runs .ts natively, zero deps)
+npm run supply-chain:guard         # publish-artifact invariants (build first)
 
-# 类型检查（机器无关：npm root -g 自动解析 npm/nvm/Homebrew 全局路径）
+# typecheck (machine-agnostic: npm root -g resolves npm/nvm/Homebrew global paths)
 npm install --no-save typescript@5 @types/node@22
 PI_ROOT="$(npm root -g)/@earendil-works/pi-coding-agent"
 mkdir -p node_modules/@earendil-works
@@ -42,33 +42,33 @@ ln -sfn "$PI_ROOT/node_modules/@earendil-works/pi-ai" node_modules/@earendil-wor
 rm -rf node_modules
 ```
 
-顺序不能颠倒：先 `npm install` 再建软链（避免 npm 清理软链）；`--no-save` 不改 package.json。tsc/bun 均非运行时依赖（Pi 经 jiti 原生加载 .ts，transpile-only 不做类型检查）。
+Order matters: `npm install` first, then the symlinks (npm would clean them up). `--no-save` keeps package.json unchanged. Neither tsc nor bun is a runtime dependency (Pi loads `.ts` through jiti, transpile-only, no type checking).
 
-- Git 规范：Conventional Commits；功能分支 `feat/<kebab-case>`；合并到 main 前更新 CHANGELOG
-- 变更行为时同步更新 README.md、CONTEXT.md（术语）、docs/adr（决策）与本文件
+- Git conventions: Conventional Commits; feature branches `feat/<kebab-case>`; update CHANGELOG before merging into main
+- When behavior changes, update README.md, README.zh-cn.md, CONTEXT.md (vocabulary), docs/adr (decisions) and this file
 
-## 验证要点
+## Verification checklist
 
-- 认证：Device Flow 走通（设备码出现）、对话正常、5 分钟后二次对话（JWT 自动刷新无感）
-- 模型目录：交互启动触发网络刷新后 `~/.pi/agent/models-store.json` 更新，`pi --list-models` 数量一致，抽一个新模型实际对话
-- 思考档位：选网关声明了档位的模型，菜单与档集一致；选 max 确认产生 thinking 块
-- session/customer：`/session-header` 输出正确；网关 SpendLogs 按 session 聚合、按 customer 归因；非本 provider 请求不受影响
-- 模态：codemode `models.getModelOfType("image"/"classifier")` 端到端可用
-- 改配置 schema 后：显式路径失败不回落、文件取代 env、多实例目录与凭据隔离
+- Auth: Device Flow completes (device code shown), conversations work, a second conversation after 5 minutes refreshes the JWT transparently
+- Catalog: a network refresh updates `~/.pi/agent/models-store.json`, `pi --list-models` shows a matching count, a newly appearing model works in a real conversation
+- Thinking levels: pick a model whose gateway declares levels and confirm the menu matches; pick max and confirm thinking blocks appear
+- Session/customer: `/session-header` output is correct; gateway SpendLogs aggregate by session and attribute by customer; requests to other providers are unaffected
+- Modalities: codemode `models.getModelOfType("image"/"classifier")` works end to end
+- Config schema changes: an explicit bad path does not fall back, a file replaces env config, per-instance catalogs and credentials stay isolated
 
-## Pi 平台已知行为
+## Known pi platform behavior
 
-- 未登录时 `pi --list-models` 不显示本 provider 的模型（`getAvailable` 按认证状态过滤）；直接 `--model <provider>/<id>` 报 "No API key found" 即证明注册成功
-- Pi 0.84.x 捆绑的 undici 需要 Node ≥ 22
-- `git:` 简写必须带 `git@`（`git:git@host:path.git@ref`），否则被当作本地路径
-- `registerProvider` 在扩展加载阶段被 queue，runner 绑定后统一 flush；加载后立即生效，无需 `/reload`
-- omp 是 Bun 单文件可执行程序，内置 `@oh-my-pi/pi-*` 框架；omp 无 `before_provider_headers`、无 `onDeviceCode`/`onSelect`，`ProviderConfig.headers` 为静态对象。钩子在 omp 中注册安全但不触发
-- `ProviderConfig.headers` 与 `compat` 的 schema 归框架所有，扩展只做浅层校验，不能写死字段白名单
+- While logged out, `pi --list-models` does not show this provider's models (`getAvailable` filters by auth state); `--model <provider>/<id>` reporting "No API key found" proves registration succeeded
+- Pi 0.84.x bundles an undici that needs Node ≥ 22
+- The `git:` shorthand requires the `git@` prefix (`git:git@host:path.git@ref`); otherwise it is treated as a local path
+- `registerProvider` is queued during extension loading and flushed once the runner binds; it takes effect immediately afterwards, no `/reload` needed
+- omp is a single-file Bun executable with the `@oh-my-pi/pi-*` framework built in; it has no `before_provider_headers`, no `onDeviceCode`/`onSelect`, and its `ProviderConfig.headers` is static. Hooks register safely in omp but never fire
+- The `ProviderConfig.headers` and `compat` schemas belong to the framework; the extension only validates shallowly and must not hardcode field whitelists
 
-## 发布
+## Release
 
-1. 更新 `package.json` / `package-lock.json` 版本与 CHANGELOG（Keep a Changelog 格式）
-2. 本地 `npm run build && bun test && npm run supply-chain:guard`
-3. 打 tag `vX.Y.Z` 并推送；CI 的 publish job 校验 tag 与两处版本一致后以 `--provenance` 发布（需仓库 secret `NPM_TOKEN`）
+1. Update the version in `package.json` / `package-lock.json` and CHANGELOG (Keep a Changelog)
+2. Run `npm run build && bun test && npm run supply-chain:guard` locally
+3. Tag `vX.Y.Z` and push; the CI publish job asserts the tag matches both version fields and publishes with `--provenance` (requires the `NPM_TOKEN` repository secret)
 
-`scripts/supply-chain-guard.mjs` 强制：禁安装期脚本（`prepare` 例外）、零运行时依赖、禁非 registry 依赖 spec、lockfile `resolved` 仅 registry.npmjs.org、npm pack 文件白名单精确到文件名。
+`scripts/supply-chain-guard.mjs` enforces: no install-time scripts (`prepare` exempt), zero runtime dependencies, no non-registry dependency specs, lockfile `resolved` hosts limited to registry.npmjs.org, and an exact npm pack file whitelist.

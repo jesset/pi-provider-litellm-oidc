@@ -1,107 +1,109 @@
 # pi-provider-litellm-oidc
 
-Pi coding agent 通过 Keycloak OIDC 免密钥（keyless）接入 LiteLLM 网关的 provider 扩展：经 Device Authorization Flow（RFC 8628）取得 JWT，以 `Authorization: Bearer` 调用网关的 Anthropic 协议端点 `/v1/messages`，全程无静态 API Key。一套代码同时适配 [pi](https://github.com/earendil-works/pi) 与 omp（oh-my-pi）。
+> 中文版：[README.zh-cn.md](README.zh-cn.md)
 
-扩展不自带任何部署默认值：网关地址、Keycloak realm 与 client 都由部署方提供——环境变量用于单实例，JSON 配置文件用于同一 pi / omp 进程内的多实例接入。
+A keyless [pi](https://github.com/earendil-works/pi) coding-agent provider that connects to a LiteLLM gateway through Keycloak OIDC: a Device Authorization Flow (RFC 8628) yields a JWT, which is sent as `Authorization: Bearer` to the gateway's Anthropic-protocol endpoint `/v1/messages`. No static API key is ever stored. The same code works with both pi and omp (oh-my-pi).
 
-## 架构
+The extension ships **no deployment defaults**: gateway URL, Keycloak realm and client all come from your deployment — environment variables for a single instance, or a JSON config file for multiple instances in one pi / omp process.
+
+## Architecture
 
 ```
 pi / omp
   │
-  │ LITELLM_OIDC_*（单实例）或 litellm-oidc.json（instances[]）
-  │    └─ loadRuntimeConfig → 每个 Instance 独立 registerProvider
+  │ LITELLM_OIDC_* (single instance) or litellm-oidc.json (instances[])
+  │    └─ loadRuntimeConfig → one registerProvider per Instance
   │
-  │ /login <provider> ──→ 该实例的 oauth.login(callbacks)
+  │ /login <provider> ──→ that instance's oauth.login(callbacks)
   │    1. POST {keycloak}/realms/{realm}/protocol/openid-connect/auth/device
-  │       (公共客户端, scope="openid profile email offline_access")
-  │    2. 展示设备码——按回调能力三级探测：
-  │       onDeviceCode() → pi 原生设备码对话框
-  │       onAuth()       → omp LoginDialog（verificationUri + userCode）
-  │       notify()       → 新 AuthInteraction 通道（自动生效）
-  │    3. 轮询 token endpoint（grant_type=urn:ietf:params:oauth:grant-type:device_code）
-  │    4. 返回 {access, refresh, expires}，框架按 provider 持久化：
-  │       pi → ~/.pi/agent/auth.json；omp → auth_credentials 表
+  │       (public client, scope="openid profile email offline_access")
+  │    2. show the device code — three-tier callback capability probe:
+  │       onDeviceCode() → pi native device-code dialog
+  │       onAuth()       → omp LoginDialog (verificationUri + userCode)
+  │       notify()       → future AuthInteraction channel (effective automatically)
+  │    3. poll the token endpoint (grant_type=urn:ietf:params:oauth:grant-type:device_code)
+  │    4. return {access, refresh, expires}; the framework persists per provider:
+  │       pi → ~/.pi/agent/auth.json; omp → auth_credentials table
   │
-  │ 请求时（框架按 provider 管理）：
-  │    - access token 临过期（5min 窗口）→ 该实例 oauth.refreshToken() → Keycloak refresh_token grant
+  │ at request time (managed per provider by the framework):
+  │    - token near expiry (5 min window) → that instance's oauth.refreshToken() → Keycloak refresh_token grant
   │    - authHeader: true → Authorization: Bearer <JWT>
   ▼
-各实例自己的 LiteLLM 网关 (enable_jwt_auth + JWKS 指向对应 Keycloak)
-  └─ /v1/messages（api: "anthropic-messages"）
+each instance's own LiteLLM gateway (enable_jwt_auth + JWKS pointing at its Keycloak)
+  └─ /v1/messages (api: "anthropic-messages")
 ```
 
-## 安装
+## Installation
 
-### npm（推荐）
+### npm (recommended)
 
 ```bash
 # pi
 pi install npm:pi-provider-litellm-oidc
 
-# omp（内置 pi 兼容的插件加载器，语法相同）
+# omp (it bundles a pi-compatible plugin loader; same syntax)
 omp install npm:pi-provider-litellm-oidc
 ```
 
-npm 通道拿到的是 minified 单文件产物（`dist/index.js`），不含 TS 源码。
+The npm channel ships the minified single-file artifact (`dist/index.js`), not the TypeScript sources.
 
-### git 源
+### git source
 
 ```bash
-# scp 简写必须带 git@，否则 Pi 会把 spec 当成本地路径
+# the scp shorthand requires the git@ prefix, otherwise pi treats the spec as a local path
 pi install git:git@github.com:jesset/pi-provider-litellm-oidc.git@v0.13.0
 ```
 
-> git 源安装会在本机 clone 完整源码并经 `prepare` 钩子现场构建 dist（需 Node ≥ 22 与可达 npm registry 拉 esbuild）——拿到的是源码，防篡改保护只存在于 npm 通道；对普通用户推荐 npm 方式。
+> A git install clones the full source and builds `dist` locally through the `prepare` hook (Node ≥ 22 and a reachable npm registry for esbuild are required). You get the sources; tamper resistance only exists on the npm channel, so npm is recommended for end users.
 
-### 本地目录
+### Local directory
 
 ```bash
 git clone https://github.com/jesset/pi-provider-litellm-oidc.git
 cd pi-provider-litellm-oidc
-npm install --no-audit --no-fund   # prepare 会构建 dist/index.js
-./install.sh                       # pi install <本地目录>
+npm install --no-audit --no-fund   # the prepare hook builds dist/index.js
+./install.sh                       # pi install <local directory>
 ```
 
-已运行中的 Pi 会话用 `/reload` 热加载。
+For an already running Pi session, use `/reload` to hot-reload the extension.
 
-### Keycloak 侧前置要求
+### Keycloak prerequisites
 
-- 公共客户端，启用 OAuth 2.0 Device Authorization Grant
-- **PKCE（v0.9.1 起）**：device 授权请求携带 `code_challenge`（S256）、token 轮询携带 `code_verifier`（RFC 7636）。Keycloak 26 起 admin console 对 public client 默认强制 PKCE（client 属性 `pkceCodeChallengeMethod=S256`）——扩展已实现该基线，无需在服务端关闭；旧版 Keycloak 忽略这些参数。报 `Missing parameter: code_challenge_method` 说明用的是更早版本，升级即可
-- Client scope 含 `offline_access`（长时 refresh token 的必要条件）
-- LiteLLM 网关 `JWT_PUBLIC_KEY_URL` 指向该 realm 的 JWKS，`enable_jwt_auth: true`
+- A public (non-confidential) client with the OAuth 2.0 Device Authorization Grant enabled
+- **PKCE (from v0.9.1)**: the device authorization request carries `code_challenge` (S256) and token polling carries `code_verifier` (RFC 7636). Keycloak 26 and later enforce PKCE for public clients by default (client attribute `pkceCodeChallengeMethod=S256`); the extension already implements that baseline, so there is no need to disable it server-side. Older Keycloak versions ignore these parameters. A `Missing parameter: code_challenge_method` error means the extension predates v0.9.1
+- The client scope must include `offline_access` (required for long-lived refresh tokens)
+- The LiteLLM gateway needs `JWT_PUBLIC_KEY_URL` pointing at that realm's JWKS and `enable_jwt_auth: true`
 
-## 使用
+## Usage
 
 ```text
-/login my-gateway            # 登录单实例（Device Flow 在任意设备浏览器完成）
+/login my-gateway            # sign in to the single instance (Device Flow completes in any browser)
 /model my-gateway/<model-id>
-/logout my-gateway           # 只清除该实例凭据
+/logout my-gateway           # clears only that instance's credentials
 
-# 配置 instances[] 后，每个实例有独立的登录、模型与凭据命名空间
+# with instances[] configured, every instance has its own login, models and credential namespace
 /login staging
 /model staging/<model-id>
-/logout staging              # 不影响 my-gateway
+/logout staging              # does not affect my-gateway
 
-/session-header              # 查看配置来源、各实例登录状态、模态清单与 session / customer 注入
+/session-header              # show config source, per-instance login state, modality counts and header injection
 ```
 
-## 配置
+## Configuration
 
-### 单实例：环境变量
+### Single instance: environment variables
 
-未发现配置文件时，用环境变量定义一个实例。**扩展不提供任何部署默认值**，缺少下列任一必需变量时加载即失败并打印配置示例：
+When no config file is found, environment variables define one instance. **The extension provides no deployment defaults**: if any required variable is missing, loading fails immediately with a configuration example.
 
-| 变量 | 必需 | 说明 |
+| Variable | Required | Description |
 |---|---|---|
-| `LITELLM_OIDC_PROVIDER_ID` | ✓ | Pi provider ID（`/login`、`--model` 的前缀），小写字母或数字开头，不能与 pi / omp 内置 provider 同名 |
-| `LITELLM_OIDC_GATEWAY_URL` | ✓ | LiteLLM 网关地址（必须 `https://`） |
-| `LITELLM_OIDC_KEYCLOAK_URL` | ✓ | Keycloak 根地址（必须 `https://`） |
-| `LITELLM_OIDC_KEYCLOAK_REALM` | ✓ | realm 名 |
-| `LITELLM_OIDC_KEYCLOAK_CLIENT_ID` | ✓ | OAuth 公共客户端 ID |
-| `LITELLM_OIDC_DISPLAY_NAME` | | UI 显示名，缺省与 provider ID 相同 |
-| `LITELLM_OIDC_KEYCLOAK_SCOPE` | | 默认 `openid profile email offline_access` |
+| `LITELLM_OIDC_PROVIDER_ID` | ✓ | Pi provider ID (the prefix for `/login` and `--model`); lowercase letter or digit first; must not collide with a built-in pi / omp provider |
+| `LITELLM_OIDC_GATEWAY_URL` | ✓ | LiteLLM gateway URL (must be `https://`) |
+| `LITELLM_OIDC_KEYCLOAK_URL` | ✓ | Keycloak base URL (must be `https://`) |
+| `LITELLM_OIDC_KEYCLOAK_REALM` | ✓ | Realm name |
+| `LITELLM_OIDC_KEYCLOAK_CLIENT_ID` | ✓ | OAuth public client ID |
+| `LITELLM_OIDC_DISPLAY_NAME` | | UI display name; defaults to the provider ID |
+| `LITELLM_OIDC_KEYCLOAK_SCOPE` | | Defaults to `openid profile email offline_access` |
 
 ```bash
 export LITELLM_OIDC_PROVIDER_ID=my-gateway
@@ -112,24 +114,24 @@ export LITELLM_OIDC_KEYCLOAK_CLIENT_ID=coding-agent-cli
 pi
 ```
 
-环境变量写法：`~/.pi/agent/settings.json` 的 `env` 块、shell profile、或启动时 `LITELLM_OIDC_...=... pi`。
+Variables can live in the `env` block of `~/.pi/agent/settings.json`, in your shell profile, or inline (`LITELLM_OIDC_...=... pi`).
 
-> **HTTPS 强制（v0.10.0 起）**：`LITELLM_OIDC_GATEWAY_URL` / `LITELLM_OIDC_KEYCLOAK_URL`，以及配置文件的 `gatewayUrl` / `keycloakUrl` / `fallbackModels[].baseUrl` 必须使用 `https://`——误配 `http://` 会让 JWT 与 refresh token 明文过线，扩展在加载时直接报错；唯一例外是 loopback 主机（`localhost`、IPv4 字面量 `127.0.0.0/8`、`[::1]`，本地调试代理；`127.*` 域名不属于例外）。
+> **HTTPS enforcement (from v0.10.0)**: `LITELLM_OIDC_GATEWAY_URL` / `LITELLM_OIDC_KEYCLOAK_URL`, plus `gatewayUrl` / `keycloakUrl` / `fallbackModels[].baseUrl` in the config file, must use `https://`. An `http://` misconfiguration sends the JWT and refresh token in plaintext, so the extension fails fast at load time. Loopback hosts are exempt (`localhost`, IPv4 literals in `127.0.0.0/8`, `[::1]`) for local debug proxies; `127.*` domains are not loopback.
 >
-> **refresh 瞬态失败 backoff（v0.10.0 起）**：Keycloak 瞬断/限流时，框架 credential lock 后排队的刷新调用会形成惊群。扩展按实例与 refresh token 记录 5s backoff 窗口，窗口内直接返回未过期的旧凭据；仅瞬态异常（网络/解析层）记录 backoff，OAuth 语义错误（如 `invalid_grant`）照常抛出以强制重新 `/login`，旧 token 已过期时不 backoff。
+> **Backoff for transient refresh failures (from v0.10.0)**: when Keycloak is briefly down or rate-limits requests, refreshes queued behind the framework credential lock form a thundering herd. The extension keeps a 5-second backoff window keyed by instance and refresh token and returns unexpired old credentials inside it. Only transient errors (network/parse) are recorded; OAuth semantic errors such as `invalid_grant` still throw so you are forced back through `/login`; expired tokens are not backed off.
 
-### 多实例：JSON 配置文件（v0.11.0 起）
+### Multiple instances: JSON config file (from v0.11.0)
 
-配置文件可在一个 pi / omp 进程中注册多个独立 provider。每个实例拥有自己的网关、Keycloak、凭据和模型目录；文件存在时 `instances[]` **完全取代** `LITELLM_OIDC_*` 实例变量，不做合并。
+A config file can register several independent providers in one pi / omp process. Each instance has its own gateway, Keycloak, credentials and model catalog. When the file exists, `instances[]` **fully replaces** the `LITELLM_OIDC_*` instance variables; nothing is merged.
 
-发现顺序：
+Discovery order:
 
-1. `LITELLM_OIDC_CONFIG=/path/to/litellm-oidc.json`（相对路径按当前工作目录解析）；
-2. `$PI_CODING_AGENT_DIR/litellm-oidc.json`；
-3. 运行时默认路径：pi 为 `~/.pi/agent/litellm-oidc.json`；omp 按 `PI_CONFIG_DIR` 与 `OMP_PROFILE` / `PI_PROFILE` 推导，默认为 `~/.omp/agent/litellm-oidc.json`。`execPath` 为 `omp` 时只查 omp 路径，为 `pi` / `node` 时只查 pi 路径；omp 以 `#!/usr/bin/env bun` 脚本分发，bun 或其他无法判定宿主的 execPath 按 pi → omp 顺序探测并输出一条告警；
-4. 均未发现时回退到环境变量单实例。
+1. `LITELLM_OIDC_CONFIG=/path/to/litellm-oidc.json` (a relative path resolves against the current working directory);
+2. `$PI_CODING_AGENT_DIR/litellm-oidc.json`;
+3. runtime default paths: pi uses `~/.pi/agent/litellm-oidc.json`; omp derives from `PI_CONFIG_DIR` and `OMP_PROFILE` / `PI_PROFILE`, defaulting to `~/.omp/agent/litellm-oidc.json`. An `execPath` of `omp` probes only the omp path, `pi` / `node` only the pi path; omp ships as a `#!/usr/bin/env bun` script, so a bun host (or any other unrecognized `execPath`) probes pi → omp and logs one warning;
+4. otherwise the extension falls back to the environment-variable single instance.
 
-显式路径不存在、JSON 非法或任一实例字段错误都会使扩展加载失败，不会静默回退。修改文件后执行 `/reload` 生效。若 pi 与 omp 的默认路径同时存在配置，bun 宿主下取上述顺序的第一个命中项；需要消除歧义时显式设置 `LITELLM_OIDC_CONFIG` 或 `PI_CODING_AGENT_DIR`。
+A missing explicit path, invalid JSON or any invalid instance field makes loading fail — there is no silent fallback. Run `/reload` after editing the file. If both pi and omp default paths exist, the first hit in the order above wins under a bun host; set `LITELLM_OIDC_CONFIG` or `PI_CODING_AGENT_DIR` explicitly to remove the ambiguity.
 
 ```json
 {
@@ -173,80 +175,80 @@ pi
 }
 ```
 
-实例必填字段：`id`、`name`、`gatewayUrl`、`keycloakUrl`、`realm`、`clientId`。`scope` 默认 `openid profile email offline_access`，`modelInfoPath` 默认 `/model/info`。`id` 必须全局唯一、小写字母或数字开头且不含 `/`，不能是 `constructor` 等原型链保留属性名，也不能覆盖 pi / omp 内置 provider（保留名单为两侧框架 registry 的并集，随运行时升级需同步）。
+Required instance fields: `id`, `name`, `gatewayUrl`, `keycloakUrl`, `realm`, `clientId`. `scope` defaults to `openid profile email offline_access` and `modelInfoPath` to `/model/info`. `id` must be unique, start with a lowercase letter or digit, contain no `/`, not be a prototype-chain name such as `constructor`, and not shadow a built-in pi / omp provider (the reserved list is the union of both runtimes' registries and must be kept in sync across upgrades).
 
-各实例的凭据与模型目录按 `id` 隔离：pi 分别存入 `~/.pi/agent/auth.json` 与 `~/.pi/agent/models-store.json` 的对应 provider 键；omp 分别存入 `auth_credentials` 表与 `models.db` 的对应 provider 作用域。
+Credentials and model catalogs are isolated per `id`: pi stores them under the corresponding provider key in `~/.pi/agent/auth.json` and `~/.pi/agent/models-store.json`; omp stores them in the `auth_credentials` table and in the `models.db` provider scope.
 
-`fallbackModels` 缺省为空数组——扩展不内置任何模型目录，离线静态目录必须按完整 `ProviderModelConfig` 显式声明。`fallbackModels[].baseUrl` 会覆盖该模型的请求地址，同样必须通过 HTTPS 校验。`compat` 的字段与枚举由运行时框架定义，扩展只做浅层 JSON 值校验，未识别字段可能被框架忽略。
+`fallbackModels` defaults to an empty array — the extension ships no built-in catalog, so an offline static catalog must be declared explicitly with complete `ProviderModelConfig` entries. `fallbackModels[].baseUrl` overrides the request URL for that model and is subject to the same HTTPS check. `compat` fields and enums are owned by the runtime framework; the extension only validates shallow JSON values, and unknown fields may be ignored by the framework.
 
-顶层可选 `session`、`customer`、`cost` 块用于覆盖对应的全局环境变量：`session` 支持 `header` / `prefix` / `clientHeader`，`customer` 支持 `header` / `claims`，`cost` 支持 `enabled` / `header`。实例内仅 `customer` 可继续覆盖，`session` 与 `cost` 保持全局。
+Optional top-level `session`, `customer` and `cost` blocks override the corresponding global environment variables: `session` accepts `header` / `prefix` / `clientHeader`, `customer` accepts `header` / `claims`, `cost` accepts `enabled` / `header`. Inside an instance only `customer` can be overridden further; `session` and `cost` stay global.
 
-## Session / Customer 标识注入（网关聚合与用户归因）
+## Session / customer identity injection (gateway aggregation and user attribution)
 
-`before_provider_headers` 钩子给**已注册实例**的 LLM 请求注入两类标识，其他 provider 的请求不受影响：
+The `before_provider_headers` hook injects two identities into LLM requests of **registered instances only**; requests to other providers are untouched:
 
-1. **Session 标识**（Pi 会话 UUID）：把同一会话的多次请求（工具调用循环、重试、多 turn）聚合到同一 session。
+1. **Session identity** (Pi session UUID): groups the requests of one session (tool-call loops, retries, multiple turns) under the same session.
 
-   默认 header `x-litellm-trace-id` 是 LiteLLM proxy 原生解析链中优先级最高的会话/追踪头（`x-litellm-trace-id` > `x-litellm-session-id` > 任意 `x-<vendor>-session-id`），值会写入 `LiteLLM_SpendLogs.session_id` 列并同步 metadata 的 `trace_id`/`session_id`，Session Logs UI 按它分组，还会向嵌套 MCP/A2A 调用传播；网关侧零配置。注意：`x-session-id` 不匹配 LiteLLM 的 `^x-.+-session-id$` 通用正则（缺 vendor 段），会被网关完全忽略，故不作默认值。
+   The default header `x-litellm-trace-id` has the highest priority in LiteLLM proxy's native session/trace parsing chain (`x-litellm-trace-id` > `x-litellm-session-id` > any `x-<vendor>-session-id`). The value lands in `LiteLLM_SpendLogs.session_id` and in metadata `trace_id`/`session_id`, groups the Session Logs UI, and propagates to nested MCP/A2A calls — no gateway configuration needed. Note that `x-session-id` does not match LiteLLM's `^x-.+-session-id$` regex (it lacks a vendor segment) and is ignored entirely, which is why it is not the default.
 
-2. **Customer 标识**（用户 email）：默认 header `x-litellm-customer-id`，LiteLLM proxy 的标准 customer/end-user 头（网关零配置即解析），值写入 SpendLogs 的 customer 维度；配合网关侧 `user_header_mappings` 与 `extra_spend_tag_headers` 可按用户 email 建用户、聚合个人用量。值直接取自框架已写入最终请求头的 `Authorization: Bearer <token>`（与实际发送的 token 严格同源，大小写不敏感解析），本地 base64url 解 JWT payload 取 `email` claim，不验签（同一 token 本就作为 bearer 发往网关，只是镜像一个 claim）；token 非 JWT、claim 缺失或未登录时跳过注入，不影响请求。
+2. **Customer identity** (user email): the default header `x-litellm-customer-id` is LiteLLM proxy's standard customer/end-user header (parsed without any gateway configuration). The value populates the SpendLogs customer dimension; combined with gateway-side `user_header_mappings` and `extra_spend_tag_headers`, it can create users and aggregate per-user spend by email. The value is taken directly from the `Authorization: Bearer <token>` header the framework already put on the final request (case-insensitive lookup, strictly the same token that is sent), decoded locally from the JWT payload via base64url — no signature verification, since the same token is already being sent as the bearer credential and this only mirrors one claim. Injection is skipped when the token is not a JWT, the claim is missing, or you are logged out; requests are unaffected.
 
-   Customer 头走**双通道**保证覆盖所有调用路径：
-   - **会话主循环**（工具调用、多 turn、重试）经 `before_provider_headers` 钩子注入；
-   - **模型级兜底**：`oauth.modifyModels` 在框架每次取模型目录时用当前 credential 把 customer 头写进每个 `model.headers`，这样**绕过会话钩子**的调用（第三方 SDK 客户端、其他扩展用裸 `pi-ai` streamSimple 直接调 LLM）经 pi-ai `createClient` 合并 `model.headers` 也同样携带。session 头仍只走钩子通道（session id 是会话级概念，不属于模型）。落盘的 models-store 只存原始目录、不含用户标识。
+   The customer header uses **two channels** to cover every call path:
+   - the **session main loop** (tool calls, multiple turns, retries) through the `before_provider_headers` hook;
+   - a **model-level fallback**: `oauth.modifyModels` stamps the customer header into every `model.headers` entry using the current credential each time the framework fetches the catalog, so calls that **bypass the session hook** (third-party SDK clients, other extensions calling `pi-ai` `streamSimple` directly) still carry it via pi-ai `createClient`'s header merge. The session header remains hook-only (a session id is not a model property). The persisted models-store contains the raw catalog without the stamp.
 
-   > 排错提示：网关 SpendLogs 里 session_id 为随机 uuid 且单请求的“孤立 session”，多来自绕过钩子的后台调用（无 trace 头时 LiteLLM 会自动生成 uuid 作 session_id）；customer 头已覆盖到这类调用，但无 trace 头的请求仍不会有真实会话关联。
+   > Troubleshooting: "orphan sessions" in gateway SpendLogs (a random uuid on a single request) usually come from background calls without a trace header — LiteLLM generates a uuid as `session_id` in that case. The customer header now covers those calls, but requests without a trace header still have no real session association.
 
-以下环境变量在 legacy 与配置文件模式下都生效；文件顶层的 `session` / `customer` 块可覆盖它们，实例内的 `customer` 还可按实例再覆盖。
+The following environment variables apply in both legacy and file modes; top-level `session` / `customer` blocks override them, and an instance-level `customer` block overrides them again.
 
-| 变量 | 默认值 | 说明 |
+| Variable | Default | Description |
 |---|---|---|
-| `LITELLM_SESSION_HEADER` | `x-litellm-trace-id` | session 标识 header 名；显式设为空字符串可禁用注入 |
-| `LITELLM_SESSION_PREFIX` | （空） | 可选前缀，例如 `pi-`；LiteLLM 要求值为 `^[a-zA-Z0-9_-]{8,}$`，前缀含 `.`/`:` 等字符会使 header 被网关丢弃 |
-| `LITELLM_SESSION_CLIENT_HEADER` | （空） | 可选第二个 header 名（值固定 `pi`），用于网关侧客户端归因；不设置则不发送 |
-| `LITELLM_CUSTOMER_HEADER` | `x-litellm-customer-id` | customer 标识 header 名；显式设为空字符串可禁用注入 |
-| `LITELLM_CUSTOMER_CLAIM` | `email` | 依次尝试的 JWT claim 名，逗号分隔可配回退链，如 `email,preferred_username` |
+| `LITELLM_SESSION_HEADER` | `x-litellm-trace-id` | Session header name; set to an empty string to disable injection |
+| `LITELLM_SESSION_PREFIX` | (empty) | Optional value prefix, e.g. `pi-`; LiteLLM requires values matching `^[a-zA-Z0-9_-]{8,}$`, so prefixes containing `.`/`:` make the gateway drop the header |
+| `LITELLM_SESSION_CLIENT_HEADER` | (empty) | Optional second header name (value fixed to `pi`) for gateway-side client attribution; not sent when unset |
+| `LITELLM_CUSTOMER_HEADER` | `x-litellm-customer-id` | Customer header name; set to an empty string to disable injection |
+| `LITELLM_CUSTOMER_CLAIM` | `email` | JWT claim names to try in order; comma-separated fallback chain, e.g. `email,preferred_username` |
 
-行为要点：
+Behavior notes:
 
-- 重试复用相同 headers，钩子不会重复触发，session id 保持一致
-- 多实例时，同一 session id 会发往各实例网关；两个网关各自形成独立的 SpendLogs 分组，不表示存在跨网关共享的会话存储
-- `/fork`、`/clone` 生成新 session 文件与新 UUID；子代理与主会话共享同一 id
-- `/new` 或 pi 重启后 id 变化；`pi -c` / `--session` 恢复会话保持原 id
-- `x-litellm-trace-id` 解析链在 LiteLLM 2026-03 上游版本引入，网关版本较旧时 header 不被解析（注入无害但无聚合效果）；`x-litellm-customer-id` 是标准 customer 头，官方语义为“always checked without any configuration”，解析不依赖该版本
+- retries reuse the same headers, so the hook does not fire twice and the session id stays stable
+- with multiple instances the same session id is sent to each gateway; the two gateways form independent SpendLogs groups, which does not imply a shared cross-gateway session store
+- `/fork` and `/clone` create a new session file and a new UUID; sub-agents share the parent session id
+- `/new` or a pi restart changes the id; `pi -c` / `--session` resumes with the original id
+- the `x-litellm-trace-id` parsing chain landed upstream in 2026-03; older gateways ignore the header (injection is harmless, just without aggregation). `x-litellm-customer-id` is a standard customer header whose documented semantics are "always checked without any configuration", so it does not depend on that version
 
-## 成本 / 用量可观测性
+## Cost / usage observability
 
-LiteLLM 在 `/v1/messages`（anthropic-messages 腿）响应头返回 `x-litellm-response-cost`（单次请求总成本）；扩展经两个钩子把它变成客户端可见的每轮成本：
+LiteLLM returns `x-litellm-response-cost` (total cost of one request) on `/v1/messages` (the anthropic-messages leg). Two hooks turn that into a per-turn cost on the client side:
 
-- `after_provider_response`：读该头存入按 provider 隔离的 pending slot（无成本头的响应清 slot，防跨请求残留串扰）
-- `message_end`：取 pending 总成本，按 input/output/cacheRead/cacheWrite token 比例摊到 `message.usage.cost`，返回替换消息——pi 与 omp 的每轮成本展示（omp 自带 $X.XX 渲染）均读 `usage.cost`
+- `after_provider_response`: reads the header into a per-provider pending slot (a response without the header clears the slot, preventing cross-request contamination)
+- `message_end`: takes the pending total and distributes it across input/output/cacheRead/cacheWrite tokens into `message.usage.cost`, returning a replacement message — both pi and omp (which renders `$X.XX` itself) read `usage.cost`
 
-**pi + omp 均生效**：成本跟踪只用 `after_provider_response` + `message_end`，omp 两者皆有；不用 omp 缺的 `before_provider_headers`，因此与 session/customer 注入不同，omp 上也工作。与 session/customer 正交：后者是网关侧 spend 维度（session_id/customer_id），前者是客户端侧单次成本值。
+**Works on both pi and omp**: cost tracking uses only `after_provider_response` + `message_end`, both present in omp; it does not use `before_provider_headers`, which omp lacks. This is orthogonal to session/customer identity: those are gateway-side spend dimensions (session_id/customer_id), while this is a client-side per-request cost value.
 
-| 变量 | 默认值 | 说明 |
+| Variable | Default | Description |
 |---|---|---|
-| `LITELLM_COST_TRACKING` | （启用） | 是否启用成本跟踪；显式设为空字符串可禁用 |
-| `LITELLM_COST_HEADER` | `x-litellm-response-cost` | 读取的响应头名；默认折扣后实付，可设 `x-litellm-response-cost-original` 取折扣前标价 |
+| `LITELLM_COST_TRACKING` | (enabled) | Enable cost tracking; set to an empty string to disable |
+| `LITELLM_COST_HEADER` | `x-litellm-response-cost` | Response header to read; the default is post-discount actual cost, `x-litellm-response-cost-original` gives pre-discount list price |
 
-## 模型列表策略
+## Model catalog strategy
 
-- 静态兜底目录按实例声明（`fallbackModels`，缺省为空），保证离线/失败时行为明确
-- 网络刷新成功的目录经 `context.publish({ persist })` 按 provider 持久化：pi 写入 `~/.pi/agent/models-store.json`，omp 写入 `models.db`；之后离线启动直接恢复各实例的真实目录
-- `refreshModels` 遵守框架两阶段刷新协议：`allowNetwork=false`（扩展注册、每次 refresh 的 phase 1）零网络请求；网络阶段从 `context.credential` 取已刷新的 access token 调 `/model/info`（合并框架 abort signal 与本地 15s 超时）
-- 数据源用 `/model/info` 而非 `/v1/models`：前者返回 deployment 级 DB 实配值（token limits、`supports_vision`、mode），后者的这些字段来自 LiteLLM 静态 cost map 按公开模型名查找——自研/别名模型一律缺失，会被误滤掉。要求网关把 `/model/info` 列入 `public_routes`（用户 JWT 可访问）
-- 过滤与分流规则：`mode` 显式为 embedding/rerank/audio_transcription/audio_speech/video_generation/realtime/batch/ocr 的条目剔除（pi 无对应消费通道）；`image_generation`/`image_edit` 分流为 pi `type:"image"` 条目、`decisions`/`evaluation`（同义 mode）分流为 `type:"classifier"` 条目（见「非 chat 模态」）；mode 缺失不据此排除；隐藏 `-openai` 后缀条目（OpenAI 协议腿孪生，与 anthropic 腿重复）；同名多 deployment 聚合为一条（token 上限等标量字段取首个非空值，成本字段取 max 保守上界）
-- 能力聚合 all-true（v0.10.0 起）：LiteLLM 同名组按 deployment 轮询，`supports_vision` 需全部 deployment 显式支持才宣传（未声明当不支持——轮到不支持的后端发图会 500）；`supports_reasoning` 任一显式 false 一票否决、全部显式 true 才直出、未声明混合回落兜底链。`input` 按 vision 判定决定是否含 image
-- `model.cost` 从 `/model/info` 的 4 个 per-token 成本字段实配（`input_cost_per_token`/`output_cost_per_token`/`cache_read_input_token_cost`/`cache_creation_input_token_cost`，换算为 pi 的 USD/百万 token 后多 deployment 取 max 上界，缺失保持 0）——请求前估算与 `x-litellm-response-cost` 实付口径互补
-- `reasoning` 四级回落推断：网关 `supports_reasoning` 声明层三态 → `reasoning_effort_levels`（档位存在即推理）→ `supported_openai_params` 含 `reasoning_effort`/`thinking` → 名字前缀正则 `REASONING_MODEL_PATTERN` 兜底
-- 思考档位自动推导 + 菜单精确对齐（v0.10.1 起）：网关 `model_info` 的 `reasoning_effort_levels`（完整档集，同名多 deployment 取交集，未知档名忽略）或 `supports_{xhigh,max}_reasoning_effort` 布尔可精确声明档位——**有档位时菜单与档集精确对齐**：档集内的档直传自身 effort（选什么发什么），档集外的默认档以 `null` 从菜单显式排除，网关 `none` 档即 off（不含则 `off:null`——不发 disabled，对强制思考后端会 4xx，显式 off 请求 clamp 最低档）；**无档位（或同名组交集为空）**维持 `{ max: "max" }` 兜底（全菜单可选）。`forceAdaptiveThinking` 对全部推理模型保留（effort 传递通道：budget 路径无法表达档位枚举）。设计取舍见 `docs/adr/0001`
-- 未登录或拉取失败时回退该实例的持久化目录 ?? 静态兜底目录
+- The static fallback catalog is declared per instance (`fallbackModels`, empty by default), so behavior is well-defined offline and on failure
+- A successful network refresh persists the catalog per provider through `context.publish({ persist })`: pi writes `~/.pi/agent/models-store.json`, omp writes `models.db`; later offline starts restore each instance's real catalog directly
+- `refreshModels` follows the framework's two-phase protocol: `allowNetwork=false` (extension registration and phase 1 of every refresh) never touches the network; the network phase takes the already-refreshed access token from `context.credential` and calls `/model/info` (combined framework abort signal and a local 15s timeout)
+- The data source is `/model/info`, not `/v1/models`: the former returns deployment-level DB values (token limits, `supports_vision`, mode), while the latter derives those fields from LiteLLM's static cost map keyed by public model name, so self-hosted and alias models are missing entirely and get filtered out. The gateway must list `/model/info` in `public_routes` (reachable with a user JWT)
+- Filtering and routing: entries whose `mode` is explicitly embedding/rerank/audio_transcription/audio_speech/video_generation/realtime/batch/ocr are dropped (pi has no consumer channel); `image_generation`/`image_edit` become pi `type:"image"` entries and `decisions`/`evaluation` (synonyms) become `type:"classifier"` entries (see "Non-chat modalities"); a missing mode is not used for exclusion; entries with the `-openai` suffix are hidden (OpenAI protocol-leg twins of the anthropic leg); same-name deployments aggregate into one entry (first non-empty scalar for limits, max for cost fields as a conservative upper bound)
+- Capability aggregation is all-true (from v0.10.0): LiteLLM round-robins a same-name model group, so `supports_vision` is only advertised when every deployment declares it (undeclared counts as unsupported — an image sent to an unsupported backend returns 500). `supports_reasoning` uses three states: any explicit false vetoes, all explicit true passes through, undeclared mixtures fall back to the inference chain. `input` contains image based on the vision verdict
+- `model.cost` is read from four per-token cost fields in `/model/info` (`input_cost_per_token`/`output_cost_per_token`/`cache_read_input_token_cost`/`cache_creation_input_token_cost`), converted to pi's USD-per-million-token unit and maxed across same-name deployments, 0 when absent — complementing `x-litellm-response-cost` actuals
+- `reasoning` uses a four-tier fallback: gateway `supports_reasoning` declaration tri-state → `reasoning_effort_levels` (any level implies reasoning) → `supported_openai_params` containing `reasoning_effort`/`thinking` → name-prefix regex `REASONING_MODEL_PATTERN`
+- Thinking-level derivation and exact menu alignment (from v0.10.1): gateway `model_info` `reasoning_effort_levels` (the complete level set, intersected across same-name deployments, unknown names ignored) or the `supports_{xhigh,max}_reasoning_effort` booleans declare levels precisely. **With declared levels the menu mirrors the set exactly**: levels inside the set pass their own effort through (you send exactly what you select), default-selectable levels outside the set are removed with `null`, and the gateway's `none` level is pi's off (absent → `off:null`, which never sends disabled; on forced-thinking backends a disabled request would 4xx, and an explicit off request is clamped to the lowest level). **Without levels (or an empty intersection)** the `{ max: "max" }` fallback keeps the full menu. `forceAdaptiveThinking` is kept for all reasoning models (it is the effort transport: the budget path cannot express level enums). Design rationale in `docs/adr/0001`
+- If the user is not logged in or the fetch fails, the instance falls back to its persisted catalog, then to its static fallback catalog
 
-## 非 chat 模态（image / decisions）
+## Non-chat modalities (image / decisions)
 
-网关上部署的非 chat 模态对 pi 自动可见（mode 数据驱动，网关声明权威哲学的延伸）——网关部署什么，客户端无需发版即暴露什么：
+Non-chat modalities deployed on the gateway are visible to pi automatically (mode-driven, an extension of the gateway-authority principle): whatever the gateway deploys is exposed without a client release.
 
-- **图像生成/编辑**（mode `image_generation` / `image_edit`）：产出 pi image 模型条目，同名 generation+edit 部署聚为一条（edit 部署声明图像输入能力）。调用分流：输入全 text → `POST /v1/images/generations`（JSON，`response_format:"b64_json"`）；含 image block → `POST /v1/images/edits`（multipart）。响应 `b64_json` 直出，缺失时回落下载 `url`。`size`/`n`/`quality` 经 codemode 调用的 `options.metadata` 透传（size 默认 1024x1024）。图像模型不出现在 `/model` 选择器（pi by design），agent 经 codemode 调用：
+- **Image generation/editing** (mode `image_generation` / `image_edit`): produces pi image entries; same-name generation+edit deployments aggregate into one entry (an edit deployment declares image input). Calls route by input: all-text → `POST /v1/images/generations` (JSON, `response_format:"b64_json"`); with image blocks → `POST /v1/images/edits` (multipart). The response returns `b64_json` directly, falling back to downloading `url` when absent. `size`/`n`/`quality` pass through `options.metadata` from codemode (size defaults to 1024x1024). Image models do not appear in the `/model` picker (pi by design); agents call them through codemode:
 
   ```js
   // @options: {"timeout_ms": 300000}
@@ -258,7 +260,7 @@ LiteLLM 在 `/v1/messages`（anthropic-messages 腿）响应头返回 `x-litellm
   for (const b of r.output) if (b.type === "image") image(b);
   ```
 
-- **结构化决策**（mode `decisions` / `evaluation`，同义）：产出 pi classifier 模型条目，System One wire 调 `POST /v1/systemone`（bool↔noul 双向映射，answers 按 name keyed，usage token 回填并计入会话成本）。agent 经 codemode `models.classify()` 提 choice/score/bool 三型问题拿概率化答案。**图像输入**：条目 `input` 含 `"image"` 时可传 `images`（assets 形态：引用名前置到 state、PNG/JPEG 白名单、opt-in 头必发——网关会静默剥离无头请求的图像并返回错误答案）；图像能力由网关 `supports_vision` 声明驱动（同名组 all-true，显式 false 一票否决），网关未声明时可经实例级 `imageClassifiers: ["<model_name>"]` 名单兜底。注意 TypeSafe 上游图像尺寸下限约 320px：
+- **Structured decisions** (mode `decisions` / `evaluation`, synonyms): produces pi classifier entries; the System One wire calls `POST /v1/systemone` (bool↔noul mapping in both directions, answers keyed by name, usage tokens backfilled and counted into session cost). Agents call `models.classify()` from codemode to ask choice/score/bool questions and get probabilistic answers. **Image input**: when the entry's `input` contains `"image"`, `images` may be passed (assets form: reference names prepended to the state, PNG/JPEG whitelist, mandatory opt-in header — the gateway silently strips images from headerless requests and returns a wrong answer). Image capability comes from the gateway's `supports_vision` declaration (all-true across the group, explicit false vetoes); when the gateway does not declare it, the per-instance `imageClassifiers: ["<model_name>"]` list can be used. Note the TypeSafe upstream minimum image size of roughly 320px:
 
   ```js
   const judge = await models.getModelOfType("classifier", "my-gateway", "typesafe/jev-latest");
@@ -273,70 +275,70 @@ LiteLLM 在 `/v1/messages`（anthropic-messages 腿）响应头返回 `x-litellm
   return r.answers.refund.probability;  // 0.99
   ```
 
-- 认证与 chat 同源：两实现共用实例 OIDC 凭证（框架 5min 窗口自动刷新后注入），customer 头经模型级 stamp 兜底通道自动携带；session 头不注入（stream-only hook 限制）
-- `/session-header` 汇总各实例的模态清单（image × N、classifier × N）
-- 成本现实：decisions 端点有真实 token 计数；images 端点实测 usage 全 0 且无 `x-litellm-response-cost`，单次成本按 0 兜底（`x-litellm-key-spend` 为 key 累计口径，不采用）
-- 边界：embedding / rerank / audio 转写 / TTS / OCR / video / realtime 等 pi 无对应 ModelType，维持剔除
+- Authentication is shared with chat: both implementations reuse the instance's OIDC credential (injected by the framework after its 5-minute refresh window); the customer header travels through the model-level stamp fallback; the session header is not injected (stream-only hook limitation)
+- `/session-header` lists each instance's modality counts (image × N, classifier × N)
+- Cost reality: the decisions endpoint reports real token counts; the images endpoint reports all-zero usage and no `x-litellm-response-cost`, so per-request cost is 0 (`x-litellm-key-spend` is a cumulative per-key value and is not used)
+- Out of scope: embedding / rerank / audio transcription / TTS / OCR / video / realtime have no matching pi ModelType and remain excluded
 
-## 验证行为说明
+## Behavior you will observe
 
-- 未登录时 `pi --list-models` **不会显示**本 provider 的模型——Pi 只列出已通过认证检查的 provider 的模型（`getAvailable` 按 auth 过滤），这是 Pi 的设计，不是扩展缺陷
-- 未登录直接 `--model my-gateway/<id>` 会报 `No API key found for my-gateway. Use /login`，即证明 provider 注册成功；多实例可分别用 `--model <instance-id>/<model-id>` 做同样验证
-- 完整验证顺序：`/login` → `/model` → 发消息 → 模型出现在列表
+- While logged out, `pi --list-models` **will not show** this provider's models — Pi only lists models of providers that pass its auth check (`getAvailable` filters by auth state). That is Pi's design, not an extension defect
+- Running `--model my-gateway/<id>` while logged out reports `No API key found for my-gateway. Use /login`, which proves the provider is registered; with multiple instances use `--model <instance-id>/<model-id>` the same way
+- Full verification order: `/login` → `/model` → send a message → the model appears in the list
 
-## 环境要求
+## Requirements
 
-- Pi ≥ 0.81.0（0.84.x 捆绑的 undici 需要 Node ≥ 22；系统默认 node 为 20 时需用 node@22 wrapper 启动 pi）
-- omp（oh-my-pi）≥ 17.0（以 `#!/usr/bin/env bun` 脚本分发，需 Bun；内置 legacy 插件兼容 shim 自动把 `@earendil-works/pi-*` 导入重写到 `@oh-my-pi/pi-*`）
-- 网络可达 Keycloak 与 LiteLLM 网关
+- Pi ≥ 0.81.0 (the undici bundled with 0.84.x needs Node ≥ 22; if your default node is 20, start pi through a node@22 wrapper)
+- omp (oh-my-pi) ≥ 17.0 (distributed as a `#!/usr/bin/env bun` script, requires Bun; its legacy plugin compatibility shim rewrites `@earendil-works/pi-*` imports to `@oh-my-pi/pi-*`)
+- Network access to Keycloak and the LiteLLM gateway
 
-## 双运行时兼容（pi / omp）
+## Dual-runtime compatibility (pi / omp)
 
-pi 与 omp 都以 legacy `OAuthLoginCallbacks` 调用扩展的 `oauth.login(callbacks)`，但构造的回调对象有差异：
+Both runtimes call the extension's `oauth.login(callbacks)` with the legacy `OAuthLoginCallbacks`, but the callback objects differ:
 
-| 回调 | pi（adaptOAuth 适配器） | omp（legacy 兼容适配器） |
+| Callback | pi (`adaptOAuth` adapter) | omp (legacy compatibility adapter) |
 |---|---|---|
-| `onDeviceCode` | 提供（原生设备码对话框） | **缺失** |
-| `onAuth` | 提供 | 提供（渲染登录对话框，含 Ctrl+click URL） |
-| `onPrompt` / `onProgress` | 提供 | 提供 |
-| `onSelect` / `onManualCodeInput` | 提供 | 缺失 |
+| `onDeviceCode` | provided (native device-code dialog) | **missing** |
+| `onAuth` | provided | provided (renders a login dialog with a Ctrl+click URL) |
+| `onPrompt` / `onProgress` | provided | provided |
+| `onSelect` / `onManualCodeInput` | provided | missing |
 
-Device Flow 设备码展示按运行时传入的回调能力**三级探测**，一套代码同时适配当前两套运行时并前瞻未来：
+Device-code display probes the provided callbacks in three tiers, so one code base serves both runtimes today and the next channel tomorrow:
 
-1. `onDeviceCode` —— pi 的 `adaptOAuth` 适配器完整提供，走原生设备码对话框
-2. `onAuth` —— omp 的 legacy 回调省略了 `onDeviceCode`，回退到 `onAuth`：以 verificationUri 为可点击 URL、userCode 写入 instructions，omp 的 LoginDialog 渲染等价登录对话框
-3. `notify({type:"device_code"})` —— 新 `AuthInteraction` 通道（pi-ai 内置 provider 已用此形状；扩展通道未来若切换，此处自动生效，无需发版）
+1. `onDeviceCode` — provided by pi's `adaptOAuth` adapter, uses the native device-code dialog
+2. `onAuth` — omp's legacy callbacks omit `onDeviceCode`, so the extension falls back to `onAuth`: verificationUri becomes a clickable URL and userCode goes into the instructions, which omp's LoginDialog renders as an equivalent dialog
+3. `notify({type:"device_code"})` — the new `AuthInteraction` channel (pi-ai's built-in providers already use this shape; if the extension channel switches, this path lights up automatically without a release)
 
-`refreshToken` / `getApiKey` 两套运行时签名一致，无需适配。
+`refreshToken` / `getApiKey` have identical signatures in both runtimes and need no adaptation.
 
-### Session / Customer header 注入限制
+### Session / customer header limitation
 
-`before_provider_headers` 钩子（注入 `x-litellm-trace-id` 与 `x-litellm-customer-id`）**仅在 pi 上生效**。omp 没有 `before_provider_headers` 事件，只有 `before_provider_request`——后者操作的是 API 请求体（`payload`：model/messages/tools/metadata），不含 HTTP headers，返回值也只能替换 payload。omp 的 `ProviderConfig.headers` 是静态 `Record<string,string>`，不支持动态回调。因此 omp 侧的网关请求不携带 session/customer header，网关侧 SpendLogs 无法按 session 聚合或按 customer 归因 omp 发出的请求。钩子在 omp 中注册安全（`on()` 不校验事件名，存入 handlers map 但永不触发），不影响其他功能。
+The `before_provider_headers` hook (injecting `x-litellm-trace-id` and `x-litellm-customer-id`) **works on pi only**. omp has no `before_provider_headers` event; it only has `before_provider_request`, which operates on the API request body (`payload`: model/messages/tools/metadata), not HTTP headers, and can only replace the payload. omp's `ProviderConfig.headers` is a static `Record<string,string>` without dynamic callbacks. Requests sent by omp therefore carry no session/customer header, so the gateway cannot aggregate spend per session or attribute it per customer for omp requests. Registering the hook in omp is safe (`on()` does not validate event names; the handler is stored but never dispatched) and does not affect other functionality.
 
-> **成本跟踪不受此限制**：成本可观测性用 `after_provider_response` + `message_end`（omp 两者皆有），故 pi 与 omp 上均生效。
+> **Cost tracking is not affected**: it uses `after_provider_response` + `message_end` (both present in omp), so it works on pi and omp alike.
 
-## 已知限制
+## Known limitations
 
-- Keycloak access token 默认 5 分钟有效期，刷新完全依赖 Pi 的 5 分钟缓冲窗口；offline refresh token 失效后 Pi 提示重新 `/login`
-- `reasoning` 四级回落推断依赖网关声明，稀疏模型仍靠名字正则；非 thinking 模型若被误判可调整 `extension/models.ts` 的 `REASONING_MODEL_PATTERN`，或修正网关 `supports_reasoning` / `supported_openai_params` 配置
-- 思考档位：菜单精确对齐依赖网关 `model_info` 配置 `reasoning_effort_levels`（未配的模型走 `{max:"max"}` 兜底全菜单）；网关误配会直接反映到用户菜单（网关声明权威，不在客户端修补）；`forceAdaptiveThinking` 对部分后端未实测，最坏情况后端不思考但不报错；xhigh 仅在网关声明 `supports_xhigh_reasoning_effort` 或 levels 含 xhigh 时可选。若某后端拒绝 adaptive thinking 格式，该模型 thinking 请求会报错，可在 `extension/models.ts` 的 `ADAPTIVE_THINKING` 按模型名豁免
-- LiteLLM 网关需暴露 Anthropic 协议端点（`/v1/messages`）且 JWT claims 含 `preferred_username`/`email`（`litellm_jwtauth` 字段映射）
-- **omp 限制**：`before_provider_headers` 钩子在 omp 中不触发，session/customer header 注入仅 pi 生效；omp 上成本显示为 $0.00 通常意味着网关把该请求路由到免费/别名后端并上报 0 成本（LiteLLM 在值为 0 时省略裸 `x-litellm-response-cost` 头），非零展示需部署侧返回非零成本
+- Keycloak access tokens live 5 minutes by default and refreshing relies entirely on Pi's 5-minute buffer; once an offline refresh token expires, Pi asks you to `/login` again
+- The four-tier `reasoning` inference depends on gateway declarations; sparse models still rely on the name regex. If a non-thinking model is misclassified, adjust `REASONING_MODEL_PATTERN` in `extension/models.ts` or fix the gateway's `supports_reasoning` / `supported_openai_params` configuration
+- Thinking levels: exact menu alignment depends on the gateway's `model_info` `reasoning_effort_levels` (models without them keep the `{max:"max"}` fallback with the full menu); gateway misconfiguration surfaces directly in the user menu (the gateway is authoritative and the client does not patch it). `forceAdaptiveThinking` has not been measured on every backend; the worst case is a backend that does not think, without an error. xhigh is only selectable when the gateway declares `supports_xhigh_reasoning_effort` or includes xhigh in the level set. If a backend rejects the adaptive thinking format, that model's thinking requests will error; exempt it by model name in `ADAPTIVE_THINKING` in `extension/models.ts`
+- The LiteLLM gateway must expose the Anthropic protocol endpoint (`/v1/messages`) and its JWTs must carry `preferred_username`/`email` (`litellm_jwtauth` field mapping)
+- **omp limitation**: `before_provider_headers` does not fire in omp, so session/customer header injection is pi-only. A `$0.00` cost on omp usually means the gateway routed the request to a free/alias backend and reported zero cost (LiteLLM omits the bare `x-litellm-response-cost` header when the value is 0); non-zero display requires a deployment that returns non-zero cost
 
-## 开发
+## Development
 
 ```bash
-# 构建（bundle + minify 产出 dist/index.js；npm install 时 prepare 也会自动构建）
+# build (bundle + minify into dist/index.js; npm install runs prepare automatically)
 npm install --no-audit --no-fund
 npm run build
 
-# 测试（bun 原生跑 .ts，零依赖；pi-* 为 import type 被 transpile 擦除）
-bun test        # 或 npm test
+# tests (bun runs .ts natively, zero dependencies; pi-* are import type and erased during transpile)
+bun test        # or npm test
 
-# 发布物结构不变量检查（CI verify/publish 同款，需先 build）
+# publish-artifact invariants (same script CI runs in verify/publish; build first)
 npm run supply-chain:guard
 
-# 类型检查（机器无关写法，详见 CLAUDE.md 开发流程）
+# typecheck (machine-agnostic setup, see CLAUDE.md for details)
 npm install --no-save typescript@5 @types/node@22
 PI_ROOT="$(npm root -g)/@earendil-works/pi-coding-agent"
 mkdir -p node_modules/@earendil-works
@@ -346,17 +348,17 @@ ln -sfn "$PI_ROOT/node_modules/@earendil-works/pi-ai" node_modules/@earendil-wor
 rm -rf node_modules
 ```
 
-**构建产物即发布物**：`extension/` 的 TS 源码经 esbuild 打包为单文件 minified `dist/index.js`（`pi.extensions` 指向它）。dist 不进仓库，构建发生在两条路径：**npm 发布**由 GitHub Actions（`.github/workflows/ci.yml`，仅 `v*` tag 触发）构建后 `npm publish --provenance`；**git 源安装**在本机经 `prepare` 钩子构建（devDeps 未装时 fallback 临时装 pinned esbuild）。TS 源码不进 npm tarball（`files` 仅含 `dist`）。esbuild 仅为 devDependency，运行时仍零依赖。
+**The build output is the distribution**: `extension/` TypeScript sources are bundled by esbuild into a single minified `dist/index.js` (`pi.extensions` points at it). `dist` is not committed. It is built two ways: **npm releases** are built by GitHub Actions (`.github/workflows/ci.yml`, only on `v*` tags) and published with `npm publish --provenance`; **git installs** build locally through the `prepare` hook (falling back to a temporary pinned esbuild when devDependencies are absent). TypeScript sources never enter the npm tarball (`files` contains only `dist`). esbuild is a devDependency only; runtime dependencies stay at zero.
 
-> v0.5.0 起由“源码即发布物”改为 bundle 分发，目的是避免客户端直接阅读/修改源码导致网关侧 header 注入等行为被篡改。这只是提高门槛，无法对抗有意绕过（git 源安装路径拿到的仍是完整源码）。
+> Since v0.5.0 the distribution moved from "source is the artifact" to a bundled artifact so that clients cannot trivially read or modify the source and tamper with header injection behavior. This only raises the bar; it cannot stop a determined user (a git install still gets the full source).
 
-**发布管线完整性**（CI 强制）：
+**Release pipeline integrity** (enforced in CI):
 
-- publish job 发布前断言 tag == `package.json` version == `package-lock.json` version，杜绝打错 tag 静默发布错版
-- `scripts/supply-chain-guard.mjs`（verify/publish 均执行）强制五类不变量：禁安装期脚本（`preinstall`/`install`/`postinstall`；`prepare` 例外——git 源安装的生命线）、零运行时依赖、禁非 registry 依赖 spec（`git:`/`file:`/`link:` 等）、lockfile `resolved` 域名白名单（仅 registry.npmjs.org）、npm pack 文件白名单精确到文件名（仅 `LICENSE`/`README.md`/`dist/index.js`/`package.json`）
-- CI 装依赖用 `npm ci --ignore-scripts`（`prepare` 被跳过，构建统一走显式 `npm run build`）；发布带 npm provenance（OIDC 签名，需仓库 secret `NPM_TOKEN`）
+- the publish job asserts tag == `package.json` version == `package-lock.json` version before publishing, preventing a mistyped tag from silently shipping the wrong version
+- `scripts/supply-chain-guard.mjs` (run in both verify and publish) enforces five invariants: no install-time scripts (`preinstall`/`install`/`postinstall`; `prepare` is exempt, git installs depend on it), zero runtime dependencies, no non-registry dependency specs (`git:`, `file:`, `link:` and friends), a lockfile `resolved` host whitelist (registry.npmjs.org only), and an exact npm pack file whitelist (`LICENSE`/`README.md`/`dist/index.js`/`package.json` only)
+- CI installs with `npm ci --ignore-scripts` (skipping `prepare`) and builds explicitly with `npm run build`; publishing uses npm provenance (OIDC-signed, requires the `NPM_TOKEN` repository secret)
 
-这些机制防的是**发布管线与依赖供应链**（恶意依赖、安装期脚本、非 registry 来源、版本漂移），与客户端防篡改（minify 提高门槛）是两个互补的威胁面。
+These mechanisms protect the **release pipeline and dependency supply chain** (malicious dependencies, install-time scripts, non-registry sources, version drift). Client-side tamper resistance (minification) is a separate, complementary threat surface.
 
 ## License
 
