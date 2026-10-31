@@ -8,12 +8,12 @@ status: accepted
 
 ## Decision
 
-- 环境变量 `LITELLM_OIDC_*` 仅保留为单实例 legacy 配置；未发现配置文件时，行为与 v0.10.1 一致，包括 LiteLLM 默认值与内置 11 模型静态兜底目录。
+- 环境变量 `LITELLM_OIDC_*` 仅保留为单实例 legacy 配置；不提供任何部署默认值（v0.13.0 起），必需变量缺失时加载即失败。
 - 多实例统一使用 JSON 文件顶层 `instances[]`。文件存在时完全取代环境变量中的实例配置，不做默认实例与文件实例的隐式合并。
 - 文件发现顺序为：显式 `LITELLM_OIDC_CONFIG`、`$PI_CODING_AGENT_DIR/litellm-oidc.json`、运行时默认路径。pi 默认 `~/.pi/agent`；omp 按 `PI_CONFIG_DIR` 与 profile 推导，默认 `~/.omp/agent`。显式路径缺失或配置非法均直接失败，不回落 legacy。
 - 配置在加载时归一化为 `InstanceConfig[]`。每个实例独立创建 OAuth、目录刷新与 customer 配置闭包；横切面 hook 与命令只注册一次，再按 provider 分发。
 - 文件采用严格 schema：必填字段、未知字段、重复或非法 provider ID、内置 provider 冲突、非 HTTPS URL 均使扩展加载失败。
-- 文件实例的 `fallbackModels` 缺省为空，不继承 LiteLLM 内置目录；需要静态兜底时按完整 `ProviderModelConfig` 显式声明。
+- 文件实例的 `fallbackModels` 缺省为空；扩展不内置任何模型目录（v0.13.0 起），需要静态兜底时按完整 `ProviderModelConfig` 显式声明。
 - `session` 与 `cost` 保持全局；`customer` 支持全局默认值与实例级覆盖。对应的全局环境变量在文件模式下仍然有效，文件顶层同名块优先。
 
 ## Considered Options
@@ -27,10 +27,10 @@ status: accepted
 
 ## Consequences
 
-- 现有未使用配置文件的用户无需迁移；启用多实例时，需要把原实例也显式写入 `instances[]`。
+- 原使用内置默认值或内置目录的用户需要一次性迁移（v0.13.0）：补全环境变量或改用配置文件，并在需要离线目录时显式声明 `fallbackModels`。
+- 配置文件启用多实例时，需要把原实例也显式写入 `instances[]`。
 - 配置错误会在扩展加载时直接暴露，而不是产生部分可用的 provider 集合。
 - 文件实例若未声明静态兜底目录，其网关必须向已认证用户开放 `/model/info`，否则登录后可能没有可选模型。
 - 内置 provider 保留名单是 pi 与 omp 两侧 registry 的静态并集，无法值导入框架枚举动态获取——升级任一运行时后需核对同步（升级 checklist）。
 - `fallbackModels[].baseUrl` 会覆盖实例网关地址且 `authHeader` 仍携带 JWT，与实例 URL 同受 HTTPS 强制校验（IPv4 字面量 127.0.0.0/8、localhost、::1 例外；`127.*` 域名不是 loopback）。
 - pi 与 omp 均已验证同一 bundle 可注册两个 provider；omp 经 bun 脚本启动的默认路径发现已端到端验证。真实双网关 Device Flow、对话与刷新仍需作为发布前端到端验证。
-- 调研与冲突裁决见 `docs/wayfinder/research/11-multi-provider-support.md`。

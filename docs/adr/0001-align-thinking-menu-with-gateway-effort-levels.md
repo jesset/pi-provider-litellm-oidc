@@ -16,5 +16,5 @@ status: accepted
 ## Consequences
 
 - 菜单收窄是确定性行为变化（v0.10.1）：如 `['low','high','max']` 组的菜单从六档变三档；会话残留档位值经 `clampThinkingLevel` 自动调到最近可用档。
-- `null` 排除与 v0.8.0 记录的 "off:null 黑洞陷阱" 不冲突：陷阱仅在**无据盲目补全**时成立，档集声明正是依据（取证链见 CLAUDE.md 的 thinking 条目）。
+- `null` 排除与 v0.8.0 记录的 "off:null 黑洞陷阱" 不冲突：陷阱仅在**无据盲目补全**时成立，档集声明正是依据（取证链见 README 的「模型列表策略」与 CONTEXT.md 的「网关声明权威」）。
 - xhigh/max 是 edge 档（pi 要求显式声明才可选），档集不含时无需 `null` 排除，不声明即不可选。
