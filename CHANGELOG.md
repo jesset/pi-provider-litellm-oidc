@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.13.1] - 2026-11-01
+
+Patch release with no functional changes: this is the first version published
+through npm trusted publishing (OIDC), which validates the repository binding
+for `.github/workflows/publish.yml`.
+
+### Fixed
+
+- 0.13.0 was bootstrapped from a local token publish and therefore carries no
+  provenance attestation; 0.13.1 is published by CI with `npm publish --provenance`
+
 ## [0.13.0] - 2026-10-31
 
 First public release. The extension no longer ships any deployment defaults, so upgrading requires a one-time configuration change.
@@ -241,6 +252,7 @@ First public release. The extension no longer ships any deployment defaults, so 
 - Every deployment parameter supplied through environment variables
 - `/session-header` command to inspect injection config and the current session id
 
+[0.13.1]: https://github.com/jesset/pi-provider-litellm-oidc/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/jesset/pi-provider-litellm-oidc/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/jesset/pi-provider-litellm-oidc/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/jesset/pi-provider-litellm-oidc/compare/v0.10.1...v0.11.0
