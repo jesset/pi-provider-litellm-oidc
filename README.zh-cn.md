@@ -248,35 +248,25 @@ Device Flow 设备码展示按运行时传入的回调能力**三级探测**，�
 ## 开发
 
 ```bash
-# 构建（bundle + minify 产出 dist/index.js；npm install 时 prepare 也会自动构建）
-npm install --no-audit --no-fund
-npm run build
-
-# 测试（bun 原生跑 .ts，零依赖；pi-* 为 import type 被 transpile 擦除）
-bun test        # 或 npm test
-
-# 发布物结构不变量检查（CI verify/publish 同款，需先 build）
-npm run supply-chain:guard
-
-# 类型检查（机器无关写法，详见 CLAUDE.md 开发流程）
-npm install --no-save typescript@5 @types/node@22
-PI_ROOT="$(npm root -g)/@earendil-works/pi-coding-agent"
-mkdir -p node_modules/@earendil-works
-ln -sfn "$PI_ROOT" node_modules/@earendil-works/pi-coding-agent
-ln -sfn "$PI_ROOT/node_modules/@earendil-works/pi-ai" node_modules/@earendil-works/pi-ai
-./node_modules/.bin/tsc -p tsconfig.json
-rm -rf node_modules
+npm install --no-audit --no-fund   # 安装 devDependencies；prepare 会构建一次
+npm run build                      # bundle + minify 产出 dist/index.js
+npm run typecheck                  # 按钉死版本的 pi 类型包跑 tsc
+bun test                           # 单元测试（bun 原生跑 .ts）
+npm run docs:check                 # 校验文档相对链接可达
+npm run supply-chain:guard         # 发布物结构不变量检查（需先 build）
 ```
 
-**构建产物即发布物**：`extension/` 的 TS 源码经 esbuild 打包为单文件 minified `dist/index.js`（`pi.extensions` 指向它）。dist 不进仓库，构建发生在两条路径：**npm 发布**由 GitHub Actions（`.github/workflows/ci.yml`，仅 `v*` tag 触发）构建后 `npm publish --provenance`；**git 源安装**在本机经 `prepare` 钩子构建（devDeps 未装时 fallback 临时装 pinned esbuild）。TS 源码不进 npm tarball（`files` 仅含 `dist`）。esbuild 仅为 devDependency，运行时仍零依赖。
+以上六步在 CI 中同样全部执行。TypeScript、`@types/node` 与 pi 类型包（钉死版本）均为 devDependencies，干净 clone 无需全局安装 pi 即可类型检查。
+
+**构建产物即发布物**：`extension/` 的 TS 源码经 esbuild 打包为单文件 minified `dist/index.js`（`pi.extensions` 指向它）。dist 不进仓库，构建发生在两条路径：**npm 发布**由 `Publish` workflow（`.github/workflows/publish.yml`，GitHub Release 触发或手动输入 tag 触发）构建后 `npm publish --provenance`；**git 源安装**在本机经 `prepare` 钩子构建（devDeps 未装时 fallback 临时装 pinned esbuild）。TS 源码不进 npm tarball（`files` 仅含 `dist`）。esbuild 仅为 devDependency，运行时仍零依赖。
 
 > v0.5.0 起由“源码即发布物”改为 bundle 分发，目的是避免客户端直接阅读/修改源码导致网关侧 header 注入等行为被篡改。这只是提高门槛，无法对抗有意绕过（git 源安装路径拿到的仍是完整源码）。
 
 **发布管线完整性**（CI 强制）：
 
-- publish job 发布前断言 tag == `package.json` version == `package-lock.json` version，杜绝打错 tag 静默发布错版
-- `scripts/supply-chain-guard.mjs`（verify/publish 均执行）强制五类不变量：禁安装期脚本（`preinstall`/`install`/`postinstall`；`prepare` 例外——git 源安装的生命线）、零运行时依赖、禁非 registry 依赖 spec（`git:`/`file:`/`link:` 等）、lockfile `resolved` 域名白名单（仅 registry.npmjs.org）、npm pack 文件白名单精确到文件名（仅 `LICENSE`/`README.md`/`dist/index.js`/`package.json`）
-- CI 装依赖用 `npm ci --ignore-scripts`（`prepare` 被跳过，构建统一走显式 `npm run build`）；发布带 npm provenance（OIDC 签名，需仓库 secret `NPM_TOKEN`）
+- publish job 发布前断言 tag == `package.json` version == `package-lock.json` version，并校验 checkout 的提交就是该 tag 指向的提交，杜绝打错 tag 静默发布错版
+- `scripts/supply-chain-guard.mjs`（verify/publish 均执行）强制五类不变量：禁安装期脚本（`preinstall`/`install`/`postinstall`；`prepare` 例外——git 源安装的生命线）、零运行时依赖、禁非 registry 依赖 spec（`git:`/`file:`/`link:` 等）、lockfile `resolved` 域名白名单（仅 registry.npmjs.org）、npm pack 文件白名单精确到文件名（仅 `LICENSE`/`README.md`/`README.zh-cn.md`/`dist/index.js`/`package.json`）
+- 发布使用 **npm trusted publishing**（OIDC），仓库中不保存任何 token secret；在 npmjs.com 上一次性配置 trusted publisher（仓库 + `publish.yml`）即可
 
 这些机制防的是**发布管线与依赖供应链**（恶意依赖、安装期脚本、非 registry 来源、版本漂移），与客户端防篡改（minify 提高门槛）是两个互补的威胁面。
 

@@ -25,7 +25,9 @@
     "build": "node build.mjs",
     "test": "bun test",
     "supply-chain:guard": "node scripts/supply-chain-guard.mjs",
-    "prepare": "test -d node_modules/esbuild || npm install --no-save --no-audit --no-fund --include=dev esbuild@0.25.12; node build.mjs"
+    "prepare": "test -d node_modules/esbuild || npm install --no-save --no-audit --no-fund --include=dev esbuild@0.25.12; node build.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "docs:check": "node scripts/check-docs-links.mjs"
   },
   "pi": {
     "extensions": [
@@ -42,7 +44,11 @@
     "node": ">=22"
   },
   "devDependencies": {
-    "esbuild": "^0.25.0"
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@types/node": "^26.3.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^7.0.2"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

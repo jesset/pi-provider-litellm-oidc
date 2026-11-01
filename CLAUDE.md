@@ -27,20 +27,15 @@ pi-provider-litellm-oidc is a keyless OIDC provider extension for the pi coding 
 ## Development workflow
 
 ```bash
-npm install --no-audit --no-fund   # installs esbuild; prepare builds once
+npm install --no-audit --no-fund   # installs devDependencies; prepare builds once
 npm run build                      # bundle + minify → dist/index.js
-bun test                           # unit tests (bun runs .ts natively, zero deps)
+npm run typecheck                  # tsc --noEmit against the pinned pi type packages
+bun test                           # unit tests (bun runs .ts natively)
+npm run docs:check                 # relative documentation links resolve
 npm run supply-chain:guard         # publish-artifact invariants (build first)
-
-# typecheck (machine-agnostic: npm root -g resolves npm/nvm/Homebrew global paths)
-npm install --no-save typescript@5 @types/node@22
-PI_ROOT="$(npm root -g)/@earendil-works/pi-coding-agent"
-mkdir -p node_modules/@earendil-works
-ln -sfn "$PI_ROOT" node_modules/@earendil-works/pi-coding-agent
-ln -sfn "$PI_ROOT/node_modules/@earendil-works/pi-ai" node_modules/@earendil-works/pi-ai
-./node_modules/.bin/tsc -p tsconfig.json
-rm -rf node_modules
 ```
+
+TypeScript, `@types/node` and the pi type packages (pinned in devDependencies) make `npm run typecheck` work on a clean clone. Neither tsc nor bun is a runtime dependency (Pi loads `.ts` through jiti, transpile-only, no type checking).
 
 Order matters: `npm install` first, then the symlinks (npm would clean them up). `--no-save` keeps package.json unchanged. Neither tsc nor bun is a runtime dependency (Pi loads `.ts` through jiti, transpile-only, no type checking).
 
@@ -68,7 +63,7 @@ Order matters: `npm install` first, then the symlinks (npm would clean them up).
 ## Release
 
 1. Update the version in `package.json` / `package-lock.json` and CHANGELOG (Keep a Changelog)
-2. Run `npm run build && bun test && npm run supply-chain:guard` locally
-3. Tag `vX.Y.Z` and push; the CI publish job asserts the tag matches both version fields and publishes with `--provenance` (requires the `NPM_TOKEN` repository secret)
+2. Run `npm run build && npm run typecheck && bun test && npm run docs:check && npm run supply-chain:guard` locally
+3. Tag `vX.Y.Z`, push, and publish a GitHub Release; `publish.yml` (or a manual `workflow_dispatch` with the tag) asserts tag == version == lockfile == checked-out commit, re-runs build/typecheck/tests/docs/guard and publishes with `--provenance` through npm trusted publishing (OIDC, no token secret; configure the trusted publisher on npmjs.com for this repo and `publish.yml`)
 
 `scripts/supply-chain-guard.mjs` enforces: no install-time scripts (`prepare` exempt), zero runtime dependencies, no non-registry dependency specs, lockfile `resolved` hosts limited to registry.npmjs.org, and an exact npm pack file whitelist.

@@ -248,35 +248,25 @@ The `before_provider_headers` hook (injecting `x-litellm-trace-id` and `x-litell
 ## Development
 
 ```bash
-# build (bundle + minify into dist/index.js; npm install runs prepare automatically)
-npm install --no-audit --no-fund
-npm run build
-
-# tests (bun runs .ts natively, zero dependencies; pi-* are import type and erased during transpile)
-bun test        # or npm test
-
-# publish-artifact invariants (same script CI runs in verify/publish; build first)
-npm run supply-chain:guard
-
-# typecheck (machine-agnostic setup, see CLAUDE.md for details)
-npm install --no-save typescript@5 @types/node@22
-PI_ROOT="$(npm root -g)/@earendil-works/pi-coding-agent"
-mkdir -p node_modules/@earendil-works
-ln -sfn "$PI_ROOT" node_modules/@earendil-works/pi-coding-agent
-ln -sfn "$PI_ROOT/node_modules/@earendil-works/pi-ai" node_modules/@earendil-works/pi-ai
-./node_modules/.bin/tsc -p tsconfig.json
-rm -rf node_modules
+npm install --no-audit --no-fund   # installs devDependencies; prepare builds once
+npm run build                      # bundle + minify into dist/index.js
+npm run typecheck                  # tsc against the pinned pi type packages
+bun test                           # unit tests (bun runs .ts natively)
+npm run docs:check                 # relative documentation links resolve
+npm run supply-chain:guard         # publish-artifact invariants (build first)
 ```
 
-**The build output is the distribution**: `extension/` TypeScript sources are bundled by esbuild into a single minified `dist/index.js` (`pi.extensions` points at it). `dist` is not committed. It is built two ways: **npm releases** are built by GitHub Actions (`.github/workflows/ci.yml`, only on `v*` tags) and published with `npm publish --provenance`; **git installs** build locally through the `prepare` hook (falling back to a temporary pinned esbuild when devDependencies are absent). TypeScript sources never enter the npm tarball (`files` contains only `dist`). esbuild is a devDependency only; runtime dependencies stay at zero.
+All six steps also run in CI. TypeScript, `@types/node` and the pi type packages (pinned) are devDependencies, so a clean clone can typecheck without a global pi installation.
+
+**The build output is the distribution**: `extension/` TypeScript sources are bundled by esbuild into a single minified `dist/index.js` (`pi.extensions` points at it). `dist` is not committed. It is built two ways: **npm releases** are built by the `Publish` workflow (`.github/workflows/publish.yml`, triggered by a GitHub Release or a manual dispatch with a tag) and published with `npm publish --provenance`; **git installs** build locally through the `prepare` hook (falling back to a temporary pinned esbuild when devDependencies are absent). TypeScript sources never enter the npm tarball (`files` contains only `dist`). esbuild is a devDependency only; runtime dependencies stay at zero.
 
 > Since v0.5.0 the distribution moved from "source is the artifact" to a bundled artifact so that clients cannot trivially read or modify the source and tamper with header injection behavior. This only raises the bar; it cannot stop a determined user (a git install still gets the full source).
 
 **Release pipeline integrity** (enforced in CI):
 
-- the publish job asserts tag == `package.json` version == `package-lock.json` version before publishing, preventing a mistyped tag from silently shipping the wrong version
-- `scripts/supply-chain-guard.mjs` (run in both verify and publish) enforces five invariants: no install-time scripts (`preinstall`/`install`/`postinstall`; `prepare` is exempt, git installs depend on it), zero runtime dependencies, no non-registry dependency specs (`git:`, `file:`, `link:` and friends), a lockfile `resolved` host whitelist (registry.npmjs.org only), and an exact npm pack file whitelist (`LICENSE`/`README.md`/`dist/index.js`/`package.json` only)
-- CI installs with `npm ci --ignore-scripts` (skipping `prepare`) and builds explicitly with `npm run build`; publishing uses npm provenance (OIDC-signed, requires the `NPM_TOKEN` repository secret)
+- the publish job asserts tag == `package.json` version == `package-lock.json` version and that the checked-out commit is the tagged commit, preventing a mistyped tag from silently shipping the wrong version
+- `scripts/supply-chain-guard.mjs` (run in both verify and publish) enforces five invariants: no install-time scripts (`preinstall`/`install`/`postinstall`; `prepare` is exempt, git installs depend on it), zero runtime dependencies, no non-registry dependency specs (`git:`, `file:`, `link:` and friends), a lockfile `resolved` host whitelist (registry.npmjs.org only), and an exact npm pack file whitelist (`LICENSE`/`README.md`/`README.zh-cn.md`/`dist/index.js`/`package.json` only)
+- publishing uses **npm trusted publishing** (OIDC), so no token secret is stored in the repository; configure the trusted publisher once on npmjs.com (repository + `publish.yml`)
 
 These mechanisms protect the **release pipeline and dependency supply chain** (malicious dependencies, install-time scripts, non-registry sources, version drift). Client-side tamper resistance (minification) is a separate, complementary threat surface.
 

@@ -15,8 +15,10 @@ First public release. The extension no longer ships any deployment defaults, so 
 - **BREAKING (catalog)**: the built-in 11-model static fallback catalog is gone. `fallbackModels` defaults to an empty array in every mode (including the environment-variable single instance); an offline static catalog must be declared explicitly with complete `ProviderModelConfig` entries
 - Hidden-name filtering keeps only the `-openai` suffix (OpenAI protocol-leg twins) instead of hardcoding a deployment-specific internal namespace prefix
 - Package name is the unscoped `pi-provider-litellm-oidc`, published to the public npm registry; `repository` / `homepage` / `bugs` / `author` metadata added
-- CI moved from GitLab CI to GitHub Actions (`.github/workflows/ci.yml`): verify (build + syntax smoke + supply-chain invariants), test (`bun test`), and tag-triggered publish (`npm publish --provenance`)
+- CI moved from GitLab CI to GitHub Actions and split into `ci.yml` (build, syntax smoke, typecheck, unit tests, documentation links and publish-artifact invariants on main and PRs) and `publish.yml` (GitHub Release or manual dispatch; tag == package.json == package-lock.json == checked-out commit assertions; publishes with `npm publish --provenance` through npm trusted publishing, no token secret)
 - `scripts/supply-chain-guard.mjs` lockfile host whitelist narrowed to `registry.npmjs.org`
+- Typecheck is a first-class step again: `typescript`, `@types/node` and the pi type packages (`@earendil-works/pi-ai` / `pi-coding-agent` 1.4.0) are devDependencies, so `npm run typecheck` works on a clean clone
+- New `npm run docs:check` validates every relative link across README, CONTEXT, CLAUDE, CHANGELOG and `docs/`
 - Documentation is English-first with Chinese mirrors (`README.zh-cn.md`, `docs/configuration.zh-cn.md`), and all commit messages are in English
 - README keeps the main flow plus a feature list and the instance configuration; deeper behavior (identity injection, cost tracking, catalog strategy, non-chat modalities) moved to `docs/configuration.md`
 - User-facing CLI messages are now English: configuration validation errors, `/session-header` output and the supply-chain guard output

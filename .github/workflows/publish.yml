@@ -1,0 +1,91 @@
+# Publish: GitHub Release (published) or manual dispatch with a tag.
+# Uses npm trusted publishing (OIDC), so no NPM_TOKEN secret is needed. Configure
+# it once on npmjs.com -> the package -> Settings -> Trusted Publisher:
+#   Repository: jesset/pi-provider-litellm-oidc
+#   Workflow:   publish.yml
+#   Environment: (leave empty)
+name: Publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag to publish, e.g. v0.13.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write # npm provenance / trusted publishing
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      # Guard against publishing the wrong commit: the release tag must match
+      # package.json, package-lock.json and the checked-out commit.
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          package_version=$(node -p 'require("./package.json").version')
+          lock_version=$(node -p 'require("./package-lock.json").version')
+          if [ "$RELEASE_TAG" != "v${package_version}" ]; then
+            echo "::error::release tag ($RELEASE_TAG) != package.json version (v${package_version})"
+            exit 1
+          fi
+          if [ "$lock_version" != "$package_version" ]; then
+            echo "::error::package-lock.json version ($lock_version) != package.json version ($package_version)"
+            exit 1
+          fi
+          tag_commit=$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")
+          head_commit=$(git rev-parse HEAD)
+          if [ "$tag_commit" != "$head_commit" ]; then
+            echo "::error::checked-out commit ($head_commit) != tag $RELEASE_TAG ($tag_commit)"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build and verify
+        run: |
+          npm run build
+          node --check dist/index.js
+          npm run typecheck
+          bun test
+          npm run docs:check
+          npm run supply-chain:guard
+
+      # Node 22 ships npm 10; trusted publishing needs npm >= 11.5.1.
+      - name: Use npm with trusted publishing support
+        run: npm install --global npm@11
+
+      - name: Validate package contents
+        run: npm pack --dry-run --ignore-scripts
+
+      - name: Publish
+        run: npm publish --provenance --access public
