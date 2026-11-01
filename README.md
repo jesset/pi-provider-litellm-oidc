@@ -8,6 +8,10 @@
 
 A keyless [pi](https://github.com/earendil-works/pi) coding-agent provider that connects to a LiteLLM gateway through Keycloak OIDC: a Device Authorization Flow (RFC 8628) yields a JWT, which is sent as `Authorization: Bearer` to the gateway's Anthropic-protocol endpoint `/v1/messages`. No static API key is ever stored. The same code works with both pi and omp (oh-my-pi).
 
+For enterprise deployments, the extension keeps identity, model catalog and spend governance on the Keycloak and LiteLLM you already operate. Terminals never store or rotate long-lived API keys: members sign in through the organization's existing Keycloak, and access tokens are issued there and refreshed automatically before expiry. The model catalog is authoritative at the gateway (`/model/info`), so platform teams can add or remove models or adjust capability and cost metadata without a client release. Requests carry session and customer identifiers (injected as headers on pi), letting gateway SpendLogs aggregate per session and attribute spend to a user. With `instances[]`, one process can target production, staging or several gateways with isolated credentials and catalogs. HTTPS enforcement, zero runtime dependencies, a minified single-file artifact and npm provenance publishing keep the supply-chain surface minimal.
+
+For day-to-day use, that is two commands: `/login <provider>` completes a browser authorization with an organizational account, while refresh, persistence and concurrency stay in the framework; the models offered by `/model` come straight from the gateway, with no hand-maintained list.
+
 The extension ships **no deployment defaults**: gateway URL, Keycloak realm and client all come from your deployment — environment variables for a single instance, or a JSON config file for multiple instances in one pi / omp process.
 
 ## Features

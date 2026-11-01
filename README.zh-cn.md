@@ -8,6 +8,10 @@
 
 Pi coding agent 通过 Keycloak OIDC 免密钥（keyless）接入 LiteLLM 网关的 provider 扩展：经 Device Authorization Flow（RFC 8628）取得 JWT，以 `Authorization: Bearer` 调用网关的 Anthropic 协议端点 `/v1/messages`，全程无静态 API Key。一套代码同时适配 [pi](https://github.com/earendil-works/pi) 与 omp（oh-my-pi）。
 
+面向企业部署，扩展把身份、模型目录与花费治理留在现有的 Keycloak 与 LiteLLM 上：终端不再保存或轮换长期 API Key，成员通过组织已有的 Keycloak 登录，访问令牌由 Keycloak 签发并在过期前自动刷新；模型目录以网关 `/model/info` 为准，平台团队增删模型、调整能力与成本元数据无需客户端发版；请求携带 session 与 customer 标识（pi 侧经 header 注入），网关 SpendLogs 可按会话聚合、按用户归因；`instances[]` 让同一进程接入生产、预发或多套网关，凭据与目录各自隔离。HTTPS 强制、零运行时依赖、minified 单文件产物与 npm provenance 发布共同约束供应链侧的最小面。
+
+日常使用只有两条命令：`/login <provider>` 用组织账号完成一次浏览器授权，刷新、持久化与并发控制交由框架处理；`/model` 中的模型直接来自网关，无需手工维护清单。
+
 扩展不自带任何部署默认值：网关地址、Keycloak realm 与 client 都由部署方提供——环境变量用于单实例，JSON 配置文件用于同一 pi / omp 进程内的多实例接入。
 
 ## 能力清单
