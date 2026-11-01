@@ -1,5 +1,9 @@
 # pi-provider-litellm-oidc
 
+[![npm version](https://img.shields.io/npm/v/pi-provider-litellm-oidc)](https://www.npmjs.com/package/pi-provider-litellm-oidc)
+[![CI](https://github.com/jesset/pi-provider-litellm-oidc/actions/workflows/ci.yml/badge.svg)](https://github.com/jesset/pi-provider-litellm-oidc/actions/workflows/ci.yml)
+[![license](https://img.shields.io/npm/l/pi-provider-litellm-oidc)](./LICENSE)
+
 > 英文版：[README.md](README.md)
 
 Pi coding agent 通过 Keycloak OIDC 免密钥（keyless）接入 LiteLLM 网关的 provider 扩展：经 Device Authorization Flow（RFC 8628）取得 JWT，以 `Authorization: Bearer` 调用网关的 Anthropic 协议端点 `/v1/messages`，全程无静态 API Key。一套代码同时适配 [pi](https://github.com/earendil-works/pi) 与 omp（oh-my-pi）。

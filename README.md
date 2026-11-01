@@ -1,5 +1,9 @@
 # pi-provider-litellm-oidc
 
+[![npm version](https://img.shields.io/npm/v/pi-provider-litellm-oidc)](https://www.npmjs.com/package/pi-provider-litellm-oidc)
+[![CI](https://github.com/jesset/pi-provider-litellm-oidc/actions/workflows/ci.yml/badge.svg)](https://github.com/jesset/pi-provider-litellm-oidc/actions/workflows/ci.yml)
+[![license](https://img.shields.io/npm/l/pi-provider-litellm-oidc)](./LICENSE)
+
 > 中文版：[README.zh-cn.md](README.zh-cn.md)
 
 A keyless [pi](https://github.com/earendil-works/pi) coding-agent provider that connects to a LiteLLM gateway through Keycloak OIDC: a Device Authorization Flow (RFC 8628) yields a JWT, which is sent as `Authorization: Bearer` to the gateway's Anthropic-protocol endpoint `/v1/messages`. No static API key is ever stored. The same code works with both pi and omp (oh-my-pi).
