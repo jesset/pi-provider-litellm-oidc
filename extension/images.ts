@@ -102,7 +102,7 @@ export function createImagesApi(instance: Pick<InstanceConfig, "gatewayBaseUrl">
           .join("\n")
           .trim();
         if (!prompt) {
-          throw new Error("litellm-images: prompt 缺失（context.input 需至少含一个 text block）");
+          throw new Error("litellm-images: prompt is missing (context.input must contain at least one text block)");
         }
         const metadata = isRecord(options?.metadata) ? options!.metadata : {};
         const size = typeof metadata.size === "string" ? metadata.size : DEFAULT_SIZE;
@@ -164,7 +164,7 @@ export function createImagesApi(instance: Pick<InstanceConfig, "gatewayBaseUrl">
         const json: unknown = await response.json();
         const items = isRecord(json) && Array.isArray(json.data) ? json.data : [];
         if (items.length === 0) {
-          throw new Error(`litellm-images: 响应缺少 data 数组: ${JSON.stringify(json).slice(0, 300)}`);
+          throw new Error(`litellm-images: response is missing the data array: ${JSON.stringify(json).slice(0, 300)}`);
         }
         for (const item of items) {
           if (!isRecord(item)) continue;
@@ -174,14 +174,14 @@ export function createImagesApi(instance: Pick<InstanceConfig, "gatewayBaseUrl">
             // 部分网关返回 URL 而非内联 base64，回落下载
             const imageResponse = await fetch(item.url, { signal });
             if (!imageResponse.ok) {
-              throw new Error(`下载生成图片失败: HTTP ${imageResponse.status}`);
+              throw new Error(`failed to download the generated image: HTTP ${imageResponse.status}`);
             }
             data = bytesToBase64(new Uint8Array(await imageResponse.arrayBuffer()));
             const contentType = imageResponse.headers.get("content-type");
             if (contentType?.startsWith("image/")) mimeType = contentType;
           }
           if (!data) {
-            throw new Error("litellm-images: 响应项既无 b64_json 也无 url");
+            throw new Error("litellm-images: response item has neither b64_json nor url");
           }
           output.output.push({ type: "image", data, mimeType });
         }

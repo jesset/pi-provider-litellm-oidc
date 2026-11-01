@@ -19,6 +19,7 @@ First public release. The extension no longer ships any deployment defaults, so 
 - `scripts/supply-chain-guard.mjs` lockfile host whitelist narrowed to `registry.npmjs.org`
 - Documentation is English-first with Chinese mirrors (`README.zh-cn.md`, `docs/configuration.zh-cn.md`), and all commit messages are in English
 - README keeps the main flow plus a feature list and the instance configuration; deeper behavior (identity injection, cost tracking, catalog strategy, non-chat modalities) moved to `docs/configuration.md`
+- User-facing CLI messages are now English: configuration validation errors, `/session-header` output and the supply-chain guard output
 
 ### Removed
 

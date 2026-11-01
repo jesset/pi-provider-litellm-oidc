@@ -98,16 +98,16 @@ export function setupExtension(pi: ExtensionAPI, config: RuntimeConfig): void {
   }
 
   pi.registerCommand("session-header", {
-    description: "查看各 LiteLLM OIDC 实例的 session / customer 注入与登录状态",
+    description: "Show session / customer injection and login state for each LiteLLM OIDC instance",
     handler: async (_args, ctx) => {
-      const sessionId = ctx.sessionManager?.getSessionId?.() ?? "（无）";
+      const sessionId = ctx.sessionManager?.getSessionId?.() ?? "(none)";
       const lines = [
-        `配置来源 : ${config.source}`,
+        `source      : ${config.source}`,
         `session id : ${sessionId}`,
         config.session.header
-          ? `session 头 : ${config.session.header}: ${config.session.prefix}${sessionId}（全部实例）`
-          : "session 头 : 已禁用（header 为空）",
-        `client 头  : ${config.session.clientHeader ? `${config.session.clientHeader}: pi` : "未启用"}`,
+          ? `session hdr : ${config.session.header}: ${config.session.prefix}${sessionId} (all instances)`
+          : "session hdr : disabled (empty header)",
+        `client hdr  : ${config.session.clientHeader ? `${config.session.clientHeader}: pi` : "not enabled"}`,
       ];
 
       for (const instance of config.instances) {
@@ -123,19 +123,19 @@ export function setupExtension(pi: ExtensionAPI, config: RuntimeConfig): void {
         };
         const modality =
           countOf("image") < 0 || countOf("classifier") < 0
-            ? "（运行时无目录查询）"
-            : `image × ${countOf("image")}、classifier × ${countOf("classifier")}（codemode：models.generateImages()/classify()）`;
-        lines.push(`非 chat 模态 : ${modality}`);
+            ? "(runtime has no catalog lookup)"
+            : `image × ${countOf("image")}, classifier × ${countOf("classifier")} (codemode: models.generateImages()/classify())`;
+        lines.push(`modalities  : ${modality}`);
         const bearer = await ctx.modelRegistry.getApiKeyForProvider(instance.providerId);
-        lines.push(`登录状态 : ${bearer ? "已登录" : "未登录"}`);
+        lines.push(`login       : ${bearer ? "signed in" : "signed out"}`);
         if (!instance.customer.header) {
-          lines.push("customer 头: 已禁用（header 为空）");
+          lines.push("customer hdr: disabled (empty header)");
           continue;
         }
         const customerId = bearer ? extractJwtClaim(bearer, instance.customer.claims) : undefined;
         lines.push(
-          `customer 头: ${instance.customer.header}: ${
-            customerId ?? `（无法解析：${bearer ? `token 无 ${instance.customer.claims.join("/")} claim` : "未登录"}）`
+          `customer hdr: ${instance.customer.header}: ${
+            customerId ?? `(unresolved: ${bearer ? `token has no ${instance.customer.claims.join("/")} claim` : "signed out"})`
           }`,
         );
       }

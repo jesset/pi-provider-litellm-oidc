@@ -226,7 +226,7 @@ describe("litellm-decisions.classify — System One wire（真实报文 fixture�
       { apiKey: "t", signal: new AbortController().signal } as any,
     );
     expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("图像");
+    expect(result.errorMessage).toContain("image input");
   });
 
   it("images 输入（条目声明 image）：state 变数组（引用在前）、assets map、opt-in 头（实测配方）", async () => {

@@ -129,11 +129,11 @@ function legacyConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
   const missing = REQUIRED_LEGACY_ENV.filter((name) => !env[name]?.trim());
   if (missing.length > 0) {
     throw new Error(
-      `未发现配置文件，且缺少必需环境变量: ${missing.join(", ")}。\n` +
-        "请任选一种配置方式：\n" +
-        "  1) 写 ~/.pi/agent/litellm-oidc.json（instances[]，见 README「配置文件」）；\n" +
-        "  2) 用 LITELLM_OIDC_CONFIG 指向配置文件；\n" +
-        "  3) 设置完整环境变量，例如：\n" +
+      `No config file found and required environment variables are missing: ${missing.join(", ")}.\n` +
+        "Choose one of the following:\n" +
+        "  1) create ~/.pi/agent/litellm-oidc.json (instances[], see the README \"Configuration\" section);\n" +
+        "  2) point LITELLM_OIDC_CONFIG at a config file;\n" +
+        "  3) set the full set of environment variables, for example:\n" +
         "     LITELLM_OIDC_PROVIDER_ID=my-gateway \\\n" +
         "     LITELLM_OIDC_GATEWAY_URL=https://litellm.example.com \\\n" +
         "     LITELLM_OIDC_KEYCLOAK_URL=https://keycloak.example.com \\\n" +
@@ -171,25 +171,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function record(value: unknown, path: string): Record<string, unknown> {
-  if (!isRecord(value)) throw new Error(`${path} 必须是对象`);
+  if (!isRecord(value)) throw new Error(`${path} must be an object`);
   return value;
 }
 
 function knownFields(value: Record<string, unknown>, allowed: readonly string[], path: string): void {
   for (const key of Object.keys(value)) {
-    if (!allowed.includes(key)) throw new Error(`${path} 含未知字段: ${key}`);
+    if (!allowed.includes(key)) throw new Error(`${path} has an unknown field: ${key}`);
   }
 }
 
 function stringValue(value: unknown, path: string, allowEmpty = false): string {
-  if (typeof value !== "string") throw new Error(`${path} 必须是字符串`);
+  if (typeof value !== "string") throw new Error(`${path} must be a string`);
   const trimmed = value.trim();
-  if (!allowEmpty && !trimmed) throw new Error(`${path} 不能为空`);
+  if (!allowEmpty && !trimmed) throw new Error(`${path} must not be empty`);
   return trimmed;
 }
 
 function requiredString(value: Record<string, unknown>, key: string, path: string): string {
-  if (!(key in value)) throw new Error(`${path}.${key} 为必填字段`);
+  if (!(key in value)) throw new Error(`${path}.${key} is required`);
   return stringValue(value[key], `${path}.${key}`);
 }
 
@@ -204,12 +204,12 @@ function optionalString(
 }
 
 function booleanValue(value: unknown, path: string): boolean {
-  if (typeof value !== "boolean") throw new Error(`${path} 必须是布尔值`);
+  if (typeof value !== "boolean") throw new Error(`${path} must be a boolean`);
   return value;
 }
 
 function claimsValue(value: unknown, path: string): string[] {
-  if (!Array.isArray(value)) throw new Error(`${path} 必须是字符串数组`);
+  if (!Array.isArray(value)) throw new Error(`${path} must be an array of strings`);
   return value.map((entry, index) => stringValue(entry, `${path}[${index}]`));
 }
 
@@ -246,14 +246,14 @@ function costBlock(value: unknown, path: string, base: CostConfig): CostConfig {
 
 function nonNegativeNumber(value: unknown, path: string): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    throw new Error(`${path} 必须是非负有限数字`);
+    throw new Error(`${path} must be a non-negative finite number`);
   }
   return value;
 }
 
 function positiveNumber(value: unknown, path: string): number {
   const number = nonNegativeNumber(value, path);
-  if (number === 0) throw new Error(`${path} 必须大于 0`);
+  if (number === 0) throw new Error(`${path} must be greater than 0`);
   return number;
 }
 
@@ -261,17 +261,17 @@ function modelCost(value: unknown, path: string): ProviderModelConfig["cost"] {
   const raw = record(value, path);
   knownFields(raw, ["input", "output", "cacheRead", "cacheWrite", "tiers"], path);
   for (const key of ["input", "output", "cacheRead", "cacheWrite"] as const) {
-    if (!(key in raw)) throw new Error(`${path}.${key} 为必填字段`);
+    if (!(key in raw)) throw new Error(`${path}.${key} is required`);
     nonNegativeNumber(raw[key], `${path}.${key}`);
   }
   if (raw.tiers !== undefined) {
-    if (!Array.isArray(raw.tiers)) throw new Error(`${path}.tiers 必须是数组`);
+    if (!Array.isArray(raw.tiers)) throw new Error(`${path}.tiers must be an array`);
     raw.tiers.forEach((tier, index) => {
       const tierPath = `${path}.tiers[${index}]`;
       const entry = record(tier, tierPath);
       knownFields(entry, ["input", "output", "cacheRead", "cacheWrite", "inputTokensAbove"], tierPath);
       for (const key of ["input", "output", "cacheRead", "cacheWrite", "inputTokensAbove"] as const) {
-        if (!(key in entry)) throw new Error(`${tierPath}.${key} 为必填字段`);
+        if (!(key in entry)) throw new Error(`${tierPath}.${key} is required`);
         nonNegativeNumber(entry[key], `${tierPath}.${key}`);
       }
     });
@@ -290,7 +290,7 @@ function modelCompat(value: unknown, path: string): void {
   for (const [key, entry] of Object.entries(raw)) {
     if (entry === null || typeof entry === "object") continue;
     if (typeof entry === "boolean" || typeof entry === "string" || typeof entry === "number") continue;
-    throw new Error(`${path}.${key} 必须是 JSON 值（布尔/字符串/数字/对象/数组/null）`);
+    throw new Error(`${path}.${key} must be a JSON value (boolean/string/number/object/array/null)`);
   }
 }
 
@@ -308,23 +308,23 @@ function fallbackModel(value: unknown, path: string): ProviderModelConfig {
     // 模型级 baseUrl 覆盖 provider 网关地址，authHeader 仍会携带 JWT——同受 HTTPS 强制
     assertSecureUrl(`${path}.baseUrl`, stringValue(raw.baseUrl, `${path}.baseUrl`));
   }
-  if (raw.reasoning === undefined) throw new Error(`${path}.reasoning 为必填字段`);
+  if (raw.reasoning === undefined) throw new Error(`${path}.reasoning is required`);
   booleanValue(raw.reasoning, `${path}.reasoning`);
-  if (!Array.isArray(raw.input) || raw.input.length === 0) throw new Error(`${path}.input 必须是非空数组`);
+  if (!Array.isArray(raw.input) || raw.input.length === 0) throw new Error(`${path}.input must be a non-empty array`);
   raw.input.forEach((entry, index) => {
-    if (entry !== "text" && entry !== "image") throw new Error(`${path}.input[${index}] 只允许 text 或 image`);
+    if (entry !== "text" && entry !== "image") throw new Error(`${path}.input[${index}] only accepts text or image`);
   });
-  if (raw.cost === undefined) throw new Error(`${path}.cost 为必填字段`);
+  if (raw.cost === undefined) throw new Error(`${path}.cost is required`);
   modelCost(raw.cost, `${path}.cost`);
-  if (raw.contextWindow === undefined) throw new Error(`${path}.contextWindow 为必填字段`);
+  if (raw.contextWindow === undefined) throw new Error(`${path}.contextWindow is required`);
   positiveNumber(raw.contextWindow, `${path}.contextWindow`);
-  if (raw.maxTokens === undefined) throw new Error(`${path}.maxTokens 为必填字段`);
+  if (raw.maxTokens === undefined) throw new Error(`${path}.maxTokens is required`);
   positiveNumber(raw.maxTokens, `${path}.maxTokens`);
   if (raw.thinkingLevelMap !== undefined) {
     const map = record(raw.thinkingLevelMap, `${path}.thinkingLevelMap`);
     for (const [key, entry] of Object.entries(map)) {
       if (entry !== null && typeof entry !== "string") {
-        throw new Error(`${path}.thinkingLevelMap.${key} 必须是字符串或 null`);
+        throw new Error(`${path}.thinkingLevelMap.${key} must be a string or null`);
       }
     }
   }
@@ -338,23 +338,23 @@ function fallbackModel(value: unknown, path: string): ProviderModelConfig {
 
 function imageClassifiersValue(value: unknown, path: string): string[] | undefined {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value)) throw new Error(`${path} 必须是字符串数组`);
+  if (!Array.isArray(value)) throw new Error(`${path} must be an array of strings`);
   for (const item of value) {
-    if (typeof item !== "string" || !item.trim()) throw new Error(`${path} 的每一项必须是非空字符串`);
+    if (typeof item !== "string" || !item.trim()) throw new Error(`${path} entries must be non-empty strings`);
   }
   return value.slice();
 }
 
 function fallbackModelsValue(value: unknown, path: string): ProviderModelConfig[] {
-  if (!Array.isArray(value)) throw new Error(`${path} 必须是数组`);
+  if (!Array.isArray(value)) throw new Error(`${path} must be an array`);
   return value.map((entry, index) => fallbackModel(entry, `${path}[${index}]`));
 }
 
 export function parseConfigFile(raw: unknown, source: string, env: NodeJS.ProcessEnv = process.env): RuntimeConfig {
-  const root = record(raw, "配置文件");
-  knownFields(root, ["instances", "session", "customer", "cost"], "配置文件");
+  const root = record(raw, "config file");
+  knownFields(root, ["instances", "session", "customer", "cost"], "config file");
   if (!Array.isArray(root.instances) || root.instances.length === 0) {
-    throw new Error("配置文件.instances 必须是非空数组");
+    throw new Error("config file.instances must be a non-empty array");
   }
 
   const customer = customerBlock(root.customer, "customer", customerFromEnv(env));
@@ -371,17 +371,17 @@ export function parseConfigFile(raw: unknown, source: string, env: NodeJS.Proces
     );
     const providerId = requiredString(entry, "id", path);
     if (!PROVIDER_ID_PATTERN.test(providerId)) {
-      throw new Error(`${path}.id 必须匹配 ${PROVIDER_ID_PATTERN.source}（小写字母或数字开头，不含 /）`);
+      throw new Error(`${path}.id must match ${PROVIDER_ID_PATTERN.source} (start with a lowercase letter or digit, no slash)`);
     }
     // Object.prototype 属性名（constructor/toString/__proto__ 等）会命中框架存储的
     // 原型链读取（models-store 的 data[providerId] 取到继承函数，structuredClone 抛
     // DataCloneError），一律拒绝
     if (providerId in Object.prototype) {
-      throw new Error(`${path}.id 不允许使用保留属性名: ${providerId}`);
+      throw new Error(`${path}.id must not use a reserved property name: ${providerId}`);
     }
-    if (RESERVED_PROVIDER_IDS.has(providerId)) throw new Error(`${path}.id 与内置 provider 冲突: ${providerId}`);
+    if (RESERVED_PROVIDER_IDS.has(providerId)) throw new Error(`${path}.id conflicts with a built-in provider: ${providerId}`);
     const normalizedId = providerId.toLowerCase();
-    if (seen.has(normalizedId)) throw new Error(`instances 中 provider id 重复: ${providerId}`);
+    if (seen.has(normalizedId)) throw new Error(`duplicate provider id in instances: ${providerId}`);
     seen.add(normalizedId);
 
     const gatewayBaseUrl = requiredString(entry, "gatewayUrl", path);
@@ -389,7 +389,7 @@ export function parseConfigFile(raw: unknown, source: string, env: NodeJS.Proces
     assertSecureUrl(`${path}.gatewayUrl`, gatewayBaseUrl);
     assertSecureUrl(`${path}.keycloakUrl`, keycloakBaseUrl);
     const modelInfoPath = optionalString(entry, "modelInfoPath", path, "/model/info");
-    if (!modelInfoPath.startsWith("/")) throw new Error(`${path}.modelInfoPath 必须以 / 开头`);
+    if (!modelInfoPath.startsWith("/")) throw new Error(`${path}.modelInfoPath must start with a slash`);
 
     return {
       providerId,
@@ -433,8 +433,8 @@ function defaultConfigPaths(env: NodeJS.ProcessEnv, execPath: string, homeDir: s
   if (executable === "omp") return [ompPath];
   if (["pi", "node", "nodejs"].includes(executable)) return [piPath];
   console.error(
-    `[pi-provider-litellm-oidc] 无法从 ${execPath} 确定宿主 CLI，按 pi → omp 顺序探测配置文件；` +
-      "如需精确指定请设置 LITELLM_OIDC_CONFIG 或 PI_CODING_AGENT_DIR",
+    `[pi-provider-litellm-oidc] cannot determine the host CLI from ${execPath}; probing config paths in pi -> omp order.` +
+      "Set LITELLM_OIDC_CONFIG or PI_CODING_AGENT_DIR to be explicit.",
   );
   return [piPath, ompPath];
 }
@@ -448,12 +448,12 @@ function parseConfigText(text: string, path: string, env: NodeJS.ProcessEnv): Ru
   try {
     raw = JSON.parse(text);
   } catch (error) {
-    throw new Error(`配置文件 JSON 解析失败: ${path}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`failed to parse config file JSON: ${path}: ${error instanceof Error ? error.message : String(error)}`);
   }
   try {
     return parseConfigFile(raw, `file:${path}`, env);
   } catch (error) {
-    throw new Error(`配置文件无效: ${path}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`invalid config file: ${path}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -470,7 +470,7 @@ export function loadRuntimeConfig(
     try {
       text = readFile(path);
     } catch (error) {
-      throw new Error(`LITELLM_OIDC_CONFIG 指向的配置文件不可读: ${path}: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`config file referenced by LITELLM_OIDC_CONFIG is not readable: ${path}: ${error instanceof Error ? error.message : String(error)}`);
     }
     return parseConfigText(text, path, env);
   }
@@ -487,7 +487,7 @@ export function loadRuntimeConfig(
       text = readFile(path);
     } catch (error) {
       if (isMissingFile(error)) continue;
-      throw new Error(`配置文件不可读: ${path}: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`config file is not readable: ${path}: ${error instanceof Error ? error.message : String(error)}`);
     }
     return parseConfigText(text, path, env);
   }
@@ -499,7 +499,7 @@ export function assertSecureUrl(name: string, url: string): void {
   try {
     parsed = new URL(url);
   } catch {
-    throw new Error(`${name} 不是合法 URL: ${url}`);
+    throw new Error(`${name} is not a valid URL: ${url}`);
   }
   // loopback 例外：localhost / ::1 / 127.0.0.0/8。必须先确认是 IPv4 字面量再判
   // 127 前缀——`127.evil.example.com` 是攻击者可注册的合法域名，startsWith("127.")
@@ -511,6 +511,6 @@ export function assertSecureUrl(name: string, url: string): void {
     (isIP(hostname) === 4 && hostname.startsWith("127."));
   if (parsed.protocol === "https:" || (parsed.protocol === "http:" && loopback)) return;
   throw new Error(
-    `${name} 必须使用 https（当前 ${url}）：http 会明文发送 JWT 与 refresh token，仅 loopback 主机例外`,
+    `${name} must use https (currently ${url}): http would send the JWT and refresh token in plaintext; only loopback hosts are exempt`,
   );
 }

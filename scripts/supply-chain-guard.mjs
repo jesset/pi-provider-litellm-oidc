@@ -15,14 +15,14 @@ const pkg = JSON.parse(readFileSync("package.json", "utf8"));
 
 // 1. 禁安装期脚本（安装该包时客户端零代码执行；prepare 保留）
 for (const hook of ["preinstall", "install", "postinstall"]) {
-  check(!pkg.scripts?.[hook], `禁止安装期脚本 scripts.${hook}`);
+  check(!pkg.scripts?.[hook], `install-time script not allowed: scripts.${hook}`);
 }
 
 // 2. 零运行时依赖（CLAUDE.md 约定由此升级为强制）
 for (const field of ["dependencies", "optionalDependencies", "bundleDependencies"]) {
   const v = pkg[field];
   const empty = !v || (Array.isArray(v) ? v.length === 0 : Object.keys(v).length === 0);
-  check(empty, `${field} 必须为空（零运行时依赖）`);
+  check(empty, `${field} must be empty (zero runtime dependencies)`);
 }
 
 // 3. 依赖 spec 只允许 registry 版本号（overrides 支持嵌套对象，递归检查）
@@ -30,7 +30,7 @@ const BAD_SPEC = /^(git:|git\+|github:|gitlab:|bitbucket:|https?:|file:|link:|wo
 const scanSpecs = (deps, where) => {
   for (const [name, spec] of Object.entries(deps ?? {})) {
     if (typeof spec === "string") {
-      check(!BAD_SPEC.test(spec), `${where}.${name} 使用非 registry spec: ${spec}`);
+      check(!BAD_SPEC.test(spec), `${where}.${name} uses a non-registry spec: ${spec}`);
     } else if (spec && typeof spec === "object") {
       scanSpecs(spec, `${where}.${name}`);
     }
@@ -47,14 +47,14 @@ let lock = null;
 try {
   lock = JSON.parse(readFileSync("package-lock.json", "utf8"));
 } catch {
-  failures.push("package-lock.json 缺失或不可解析");
+  failures.push("package-lock.json is missing or unparsable");
 }
 if (lock) {
   for (const [path, entry] of Object.entries(lock.packages ?? {})) {
     if (!entry.resolved) continue;
     check(
       ALLOWED_HOSTS.some((h) => entry.resolved.startsWith(h)),
-      `lockfile ${path || "."} 的 resolved 非白名单来源: ${entry.resolved}`,
+      `lockfile ${path || "."} resolved to a non-whitelisted source: ${entry.resolved}`,
     );
   }
 }
@@ -68,13 +68,13 @@ const packOut = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-sc
 });
 const files = JSON.parse(packOut)[0].files.map((f) => f.path);
 for (const f of files) {
-  check(ALLOWED_FILES.has(f), `tarball 含白名单外文件: ${f}`);
+  check(ALLOWED_FILES.has(f), `tarball contains a file outside the whitelist: ${f}`);
 }
-check(files.includes("dist/index.js"), "tarball 缺少 dist/index.js（先运行 npm run build）");
+check(files.includes("dist/index.js"), "tarball is missing dist/index.js (run npm run build first)");
 
 if (failures.length > 0) {
-  console.error("supply-chain guard 未通过：");
+  console.error("supply-chain guard failed:");
   for (const f of failures) console.error(`  ✗ ${f}`);
   process.exit(1);
 }
-console.log(`supply-chain guard 通过（${files.length} 个发布文件：${files.join(", ")}）`);
+console.log(`supply-chain guard passed (${files.length} published files: ${files.join(", ")})`);

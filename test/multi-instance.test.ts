@@ -167,7 +167,7 @@ describe("多实例扩展装配", () => {
       },
     });
     expect(notifications).toHaveLength(1);
-    expect(notifications[0]).toContain("配置来源 : file:test");
+    expect(notifications[0]).toContain("source      : file:test");
     expect(notifications[0]).toContain("[litellm-oidc] LiteLLM OIDC gateway");
     expect(notifications[0]).toContain("cloud@example.com");
     expect(notifications[0]).toContain("[staging] staging gateway");

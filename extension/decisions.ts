@@ -46,7 +46,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function requiredNumber(id: string, value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`litellm-decisions: ${id} 缺少有效数值字段`);
+    throw new Error(`litellm-decisions: ${id} is missing a valid numeric field`);
   }
   return value;
 }
@@ -56,17 +56,17 @@ function parseAnswers(
   raw: unknown,
   questions: ClassifierContext["questions"],
 ): ClassifierResult["answers"] {
-  if (!isRecord(raw)) throw new Error("litellm-decisions: 响应缺少 answers 对象");
+  if (!isRecord(raw)) throw new Error("litellm-decisions: response is missing the answers object");
   const answers: ClassifierResult["answers"] = {};
   for (const [id, question] of Object.entries(questions)) {
     const answer = raw[id];
-    if (!isRecord(answer)) throw new Error(`litellm-decisions: 响应缺少 ${id} 的答案`);
+    if (!isRecord(answer)) throw new Error(`litellm-decisions: response is missing an answer for ${id}`);
     if (question.type === "choice") {
       if (answer.type !== "choice" || typeof answer.choice !== "string") {
-        throw new Error(`litellm-decisions: ${id} 未返回 choice 答案`);
+        throw new Error(`litellm-decisions: ${id} did not return a choice answer`);
       }
       const probabilities = answer.probabilities;
-      if (!isRecord(probabilities)) throw new Error(`litellm-decisions: ${id} 缺少 probabilities`);
+      if (!isRecord(probabilities)) throw new Error(`litellm-decisions: ${id} is missing probabilities`);
       const parsed: Record<string, number> = {};
       for (const [key, probability] of Object.entries(probabilities)) {
         parsed[key] = requiredNumber(`${id}.${key}`, probability);
@@ -78,7 +78,7 @@ function parseAnswers(
         confidence: requiredNumber(`${id}.confidence`, answer.confidence),
       };
     } else if (question.type === "score") {
-      if (answer.type !== "score") throw new Error(`litellm-decisions: ${id} 未返回 score 答案`);
+      if (answer.type !== "score") throw new Error(`litellm-decisions: ${id} did not return a score answer`);
       answers[id] = {
         type: "score",
         score: requiredNumber(`${id}.score`, answer.score),
@@ -138,7 +138,7 @@ function wireRequest(context: ClassifierContext): {
     const format = ASSET_FORMATS[image.mimeType];
     if (!format) {
       throw new Error(
-        `litellm-decisions: assets 形态仅接受 PNG/JPEG 图像（TypeSafe 上游限制），得到 ${image.mimeType}`,
+        `litellm-decisions: the assets form only accepts PNG/JPEG images (upstream TypeSafe limitation), got ${image.mimeType}`,
       );
     }
     const ref = `<image-${index + 1}>`;
@@ -172,7 +172,7 @@ export function createDecisionsClassifier(
         }
         if (context.images?.length) {
           if (!model.input.includes("image")) {
-            throw new Error("litellm-decisions: 该条目未声明图像输入（网关 supports_vision 未声明 true）");
+            throw new Error("litellm-decisions: this entry does not declare image input (gateway supports_vision is not declared true)");
           }
         }
         const wired = wireRequest(context);
@@ -203,7 +203,7 @@ export function createDecisionsClassifier(
           );
         }
         const json: unknown = await response.json();
-        if (!isRecord(json)) throw new Error("litellm-decisions: 响应不是 JSON 对象");
+        if (!isRecord(json)) throw new Error("litellm-decisions: response is not a JSON object");
         // 先取 usage 再解析 answers：畸形答案的请求也已计费
         const usage = parseUsage(json.usage, model);
         if (usage) output.usage = usage;

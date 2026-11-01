@@ -73,7 +73,7 @@ describe("assertSecureUrl", () => {
 describe("legacy env 单实例", () => {
   it("无配置文件且未设置环境变量时 fail-fast，不提供部署默认值", () => {
     const files = reader({});
-    expect(() => loadRuntimeConfig({}, files.read, NODE, HOME)).toThrow(/缺少必需环境变量: LITELLM_OIDC_PROVIDER_ID, LITELLM_OIDC_GATEWAY_URL/);
+    expect(() => loadRuntimeConfig({}, files.read, NODE, HOME)).toThrow(/required environment variables are missing: LITELLM_OIDC_PROVIDER_ID, LITELLM_OIDC_GATEWAY_URL/);
     expect(files.calls).toEqual([PI_DEFAULT]);
   });
 
@@ -227,12 +227,12 @@ describe("配置文件发现", () => {
     expect(() => loadRuntimeConfig({
       LITELLM_OIDC_CONFIG: "/missing.json",
       LITELLM_OIDC_PROVIDER_ID: "legacy",
-    }, reader({}).read, NODE, HOME)).toThrow(/配置文件不可读/);
+    }, reader({}).read, NODE, HOME)).toThrow(/config file referenced by LITELLM_OIDC_CONFIG is not readable/);
   });
 
   it("自动发现的非法 JSON 直接失败", () => {
     const files = reader({ [PI_DEFAULT]: "not-json" });
-    expect(() => loadRuntimeConfig({}, files.read, NODE, HOME)).toThrow(/JSON 解析失败/);
+    expect(() => loadRuntimeConfig({}, files.read, NODE, HOME)).toThrow(/failed to parse config file JSON/);
   });
 });
 
@@ -315,7 +315,7 @@ describe("文件 schema 与归一化", () => {
     // 非 JSON 值（直接调用 parseConfigFile 可传入函数）拒绝
     expect(() => parseConfigFile({
       instances: [{ ...instance(), fallbackModels: [{ ...model, compat: { forceAdaptiveThinking: (() => {}) as unknown as boolean } }] }],
-    }, "file:test", {})).toThrow(/必须是 JSON 值/);
+    }, "file:test", {})).toThrow(/must be a JSON value/);
   });
 
   it("fallbackModels[].baseUrl 同受 HTTPS 强制", () => {
@@ -332,23 +332,23 @@ describe("文件 schema 与归一化", () => {
   });
 
   it("文件 cost.header 必须非空，禁用成本使用 enabled", () => {
-    expect(() => parseConfigFile({ ...document(), cost: { header: "" } }, "file:test", {})).toThrow(/cost.header 不能为空/);
+    expect(() => parseConfigFile({ ...document(), cost: { header: "" } }, "file:test", {})).toThrow(/cost.header must not be empty/);
     expect(parseConfigFile({ ...document(), cost: { enabled: false } }, "file:test", {}).cost.enabled).toBe(false);
   });
 
   it("instances 必须是非空数组", () => {
-    expect(() => parseConfigFile({ instances: [] }, "file:test", {})).toThrow(/非空数组/);
-    expect(() => parseConfigFile({}, "file:test", {})).toThrow(/非空数组/);
+    expect(() => parseConfigFile({ instances: [] }, "file:test", {})).toThrow(/non-empty array/);
+    expect(() => parseConfigFile({}, "file:test", {})).toThrow(/non-empty array/);
   });
 
   it("根、实例、全局块与 fallback 的未知字段均失败", () => {
-    expect(() => parseConfigFile({ ...document(), typo: true }, "file:test", {})).toThrow(/未知字段: typo/);
+    expect(() => parseConfigFile({ ...document(), typo: true }, "file:test", {})).toThrow(/unknown field: typo/);
     expect(() => parseConfigFile({ instances: [{ ...instance(), gatewayURL: "https://x" }] }, "file:test", {}))
-      .toThrow(/未知字段: gatewayURL/);
-    expect(() => parseConfigFile({ ...document(), session: { heder: "x" } }, "file:test", {})).toThrow(/未知字段: heder/);
+      .toThrow(/unknown field: gatewayURL/);
+    expect(() => parseConfigFile({ ...document(), session: { heder: "x" } }, "file:test", {})).toThrow(/unknown field: heder/);
     expect(() => parseConfigFile({
       instances: [{ ...instance(), fallbackModels: [{ id: "x", typo: true }] }],
-    }, "file:test", {})).toThrow(/未知字段: typo/);
+    }, "file:test", {})).toThrow(/unknown field: typo/);
   });
 
   it("缺少实例必填字段时指出字段路径", () => {
@@ -359,24 +359,24 @@ describe("文件 schema 与归一化", () => {
 
   it("拒绝重复、非法及内置 provider id", () => {
     expect(() => parseConfigFile({ instances: [instance("same"), instance("same")] }, "file:test", {}))
-      .toThrow(/重复/);
-    expect(() => parseConfigFile({ instances: [instance("Bad/Id")] }, "file:test", {})).toThrow(/必须匹配/);
-    expect(() => parseConfigFile({ instances: [instance("anthropic")] }, "file:test", {})).toThrow(/内置 provider/);
-    expect(() => parseConfigFile({ instances: [instance("radius")] }, "file:test", {})).toThrow(/内置 provider/);
+      .toThrow(/duplicate/);
+    expect(() => parseConfigFile({ instances: [instance("Bad/Id")] }, "file:test", {})).toThrow(/must match/);
+    expect(() => parseConfigFile({ instances: [instance("anthropic")] }, "file:test", {})).toThrow(/built-in provider/);
+    expect(() => parseConfigFile({ instances: [instance("radius")] }, "file:test", {})).toThrow(/built-in provider/);
     // omp 内置（pi-ai 18.1.3 registry）与本机在用的 provider
-    expect(() => parseConfigFile({ instances: [instance("azure")] }, "file:test", {})).toThrow(/内置 provider/);
-    expect(() => parseConfigFile({ instances: [instance("meta")] }, "file:test", {})).toThrow(/内置 provider/);
-    expect(() => parseConfigFile({ instances: [instance("typesafe")] }, "file:test", {})).toThrow(/内置 provider/);
-    expect(() => parseConfigFile({ instances: [instance("litellm")] }, "file:test", {})).toThrow(/内置 provider/);
+    expect(() => parseConfigFile({ instances: [instance("azure")] }, "file:test", {})).toThrow(/built-in provider/);
+    expect(() => parseConfigFile({ instances: [instance("meta")] }, "file:test", {})).toThrow(/built-in provider/);
+    expect(() => parseConfigFile({ instances: [instance("typesafe")] }, "file:test", {})).toThrow(/built-in provider/);
+    expect(() => parseConfigFile({ instances: [instance("litellm")] }, "file:test", {})).toThrow(/built-in provider/);
   });
 
   it("拒绝 Object.prototype 属性名（models-store 原型链读取会 structuredClone 抛错）", () => {
     // constructor 是唯一能穿过小写 pattern 且命中原型链的属性名
-    expect(() => parseConfigFile({ instances: [instance("constructor")] }, "file:test", {})).toThrow(/保留属性名/);
+    expect(() => parseConfigFile({ instances: [instance("constructor")] }, "file:test", {})).toThrow(/reserved property name/);
     // 驼峰原型属性名（toString/hasOwnProperty）与 __proto__ 被 pattern 先行拒绝，同样不可用
-    expect(() => parseConfigFile({ instances: [instance("toString")] }, "file:test", {})).toThrow(/必须匹配/);
-    expect(() => parseConfigFile({ instances: [instance("hasOwnProperty")] }, "file:test", {})).toThrow(/必须匹配/);
-    expect(() => parseConfigFile({ instances: [instance("__proto__")] }, "file:test", {})).toThrow(/必须匹配/);
+    expect(() => parseConfigFile({ instances: [instance("toString")] }, "file:test", {})).toThrow(/must match/);
+    expect(() => parseConfigFile({ instances: [instance("hasOwnProperty")] }, "file:test", {})).toThrow(/must match/);
+    expect(() => parseConfigFile({ instances: [instance("__proto__")] }, "file:test", {})).toThrow(/must match/);
   });
 
   it("文件实例 URL 强制 HTTPS，loopback 例外", () => {
@@ -401,9 +401,9 @@ describe("文件 schema 与归一化", () => {
     }, "file:test", {})).toThrow(/input\[0\]/);
     expect(() => parseConfigFile({
       instances: [{ ...instance(), fallbackModels: [{ ...valid, cost: { ...valid.cost, input: -1 } }] }],
-    }, "file:test", {})).toThrow(/非负有限数字/);
+    }, "file:test", {})).toThrow(/non-negative finite number/);
     expect(() => parseConfigFile({
       instances: [{ ...instance(), fallbackModels: [{ ...valid, contextWindow: 0 }] }],
-    }, "file:test", {})).toThrow(/必须大于 0/);
+    }, "file:test", {})).toThrow(/must be greater than 0/);
   });
 });
