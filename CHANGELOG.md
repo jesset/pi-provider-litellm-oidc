@@ -17,11 +17,13 @@ First public release. The extension no longer ships any deployment defaults, so 
 - Package name is the unscoped `pi-provider-litellm-oidc`, published to the public npm registry; `repository` / `homepage` / `bugs` / `author` metadata added
 - CI moved from GitLab CI to GitHub Actions (`.github/workflows/ci.yml`): verify (build + syntax smoke + supply-chain invariants), test (`bun test`), and tag-triggered publish (`npm publish --provenance`)
 - `scripts/supply-chain-guard.mjs` lockfile host whitelist narrowed to `registry.npmjs.org`
-- Documentation is English-first; a Chinese README is available at `README.zh-cn.md`, and all commit messages are in English
+- Documentation is English-first with Chinese mirrors (`README.zh-cn.md`, `docs/configuration.zh-cn.md`), and all commit messages are in English
+- README keeps the main flow plus a feature list and the instance configuration; deeper behavior (identity injection, cost tracking, catalog strategy, non-chat modalities) moved to `docs/configuration.md`
 
 ### Removed
 
 - Internal research notes, wayfinder tickets and agent workflow docs that only made sense for one deployment
+- The `install.sh` helper script; the local development flow in the README covers the same steps
 
 ## [0.12.0] - 2026-10-28
 

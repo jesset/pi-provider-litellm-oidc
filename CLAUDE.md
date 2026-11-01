@@ -45,7 +45,7 @@ rm -rf node_modules
 Order matters: `npm install` first, then the symlinks (npm would clean them up). `--no-save` keeps package.json unchanged. Neither tsc nor bun is a runtime dependency (Pi loads `.ts` through jiti, transpile-only, no type checking).
 
 - Git conventions: Conventional Commits; feature branches `feat/<kebab-case>`; update CHANGELOG before merging into main
-- When behavior changes, update README.md, README.zh-cn.md, CONTEXT.md (vocabulary), docs/adr (decisions) and this file
+- When behavior changes, update README.md, README.zh-cn.md, docs/configuration.md, docs/configuration.zh-cn.md, CONTEXT.md (vocabulary), docs/adr (decisions) and this file
 
 ## Verification checklist
 

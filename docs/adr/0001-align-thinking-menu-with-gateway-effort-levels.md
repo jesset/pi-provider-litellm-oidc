@@ -16,5 +16,5 @@ This extends the "gateway authority" principle (same family as vision all-true a
 ## Consequences
 
 - The narrower menu is a deterministic behavior change (v0.10.1): for example a `['low','high','max']` group goes from six levels to three; a leftover session level is clamped to the nearest available level by `clampThinkingLevel`.
-- Null exclusion does not conflict with the "off:null trap" recorded in v0.8.0: the trap only applies when filling in values without evidence, and a level declaration is exactly that evidence (see the "Model catalog strategy" section of README and "Gateway authority" in CONTEXT.md).
+- Null exclusion does not conflict with the "off:null trap" recorded in v0.8.0: the trap only applies when filling in values without evidence, and a level declaration is exactly that evidence (see the "Model catalog strategy" section of the [configuration reference](../configuration.md) and "Gateway authority" in CONTEXT.md).
 - xhigh/max are edge levels (pi requires an explicit declaration for them), so when the set does not contain them no `null` exclusion is needed — not declaring them is enough to make them unselectable.
