@@ -1,5 +1,5 @@
 import type { AssistantImages, ImageModel, ImagesContext, ImagesOptions, ProviderImages, Usage } from "@earendil-works/pi-ai";
-import { trimTrailingSlash } from "./config.ts";
+import { assertSecureUrl, trimTrailingSlash } from "./config.ts";
 import type { InstanceConfig } from "./config.ts";
 
 /**
@@ -171,14 +171,22 @@ export function createImagesApi(instance: Pick<InstanceConfig, "gatewayBaseUrl">
           let data: string | undefined = typeof item.b64_json === "string" ? item.b64_json : undefined;
           let mimeType = "image/png";
           if (!data && typeof item.url === "string") {
-            // 部分网关返回 URL 而非内联 base64，回落下载
-            const imageResponse = await fetch(item.url, { signal });
+            // 部分网关返回 URL 而非内联 base64，回落下载。该 URL 由网关/上游选择，
+            // 与其它出站 URL 同受 HTTPS 强制（assertSecureUrl：回环 http 豁免，file: 拒绝），
+            // 不跟随跨 origin 重定向，且只嵌入 image/* 响应体
+            assertSecureUrl("images response url", item.url);
+            const imageResponse = await fetch(item.url, { signal, redirect: "error" });
             if (!imageResponse.ok) {
               throw new Error(`failed to download the generated image: HTTP ${imageResponse.status}`);
             }
-            data = bytesToBase64(new Uint8Array(await imageResponse.arrayBuffer()));
             const contentType = imageResponse.headers.get("content-type");
-            if (contentType?.startsWith("image/")) mimeType = contentType;
+            if (!contentType?.startsWith("image/")) {
+              throw new Error(
+                `litellm-images: refusing to embed non-image download (content-type: ${contentType ?? "none"})`,
+              );
+            }
+            mimeType = contentType;
+            data = bytesToBase64(new Uint8Array(await imageResponse.arrayBuffer()));
           }
           if (!data) {
             throw new Error("litellm-images: response item has neither b64_json nor url");
