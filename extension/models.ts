@@ -434,9 +434,20 @@ export async function fetchGatewayModels(instance: InstanceConfig, bearerToken: 
  * 从持久化目录条目（models-store.json，由本扩展网络刷新成功时 publish 的
  * persist 写入）恢复模型列表，供离线阶段与网络失败时回落，避免退回静态列表。
  * 条目运行时形状即 ProviderModelConfig[]，Model -> ProviderModelConfig 为结构子集。
+ * 写侧（transformModelInfo）从不产出 baseUrl/headers：重载时 validate-or-strip ——
+ * 剥离这两个键（它们只能是 publish 之后磁盘篡改引入的，模型级 baseUrl 会覆盖
+ * 配置校验过的 https 网关源，而该覆盖同样携带 JWT，见 config.ts fallbackModel），
+ * 要求非空字符串 id，其余字段原样保留；过滤后为空则整体回落 undefined。
  */
 export function storedModels(stored: Readonly<ModelsStoreEntry> | undefined): ProviderModelConfig[] | undefined {
   const models = stored?.models;
-  if (!models || models.length === 0) return undefined;
-  return models.slice() as ProviderModelConfig[];
+  if (!Array.isArray(models) || models.length === 0) return undefined;
+  const sanitized: ProviderModelConfig[] = [];
+  for (const entry of models) {
+    if (typeof entry?.id !== "string" || entry.id === "") continue;
+    const { baseUrl: _droppedBaseUrl, headers: _droppedHeaders, ...rest } =
+      entry as unknown as Record<string, unknown>;
+    sanitized.push(rest as unknown as ProviderModelConfig);
+  }
+  return sanitized.length > 0 ? sanitized : undefined;
 }
