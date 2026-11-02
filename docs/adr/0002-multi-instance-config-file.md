@@ -15,6 +15,7 @@ One extension has to connect to several LiteLLM gateway and Keycloak deployments
 - The file uses a strict schema: required fields, unknown fields, duplicate or invalid provider IDs, built-in provider collisions and non-HTTPS URLs all make extension loading fail.
 - `fallbackModels` defaults to empty for file instances; the extension ships no built-in catalog (since v0.13.0), so a static fallback must be declared explicitly with complete `ProviderModelConfig` entries.
 - `session` and `cost` stay global; `customer` supports a global default plus per-instance overrides. The corresponding global environment variables still apply in file mode, with the file's top-level block taking precedence.
+- The strict-schema failure list is extended by [ADR 0003](0003-audit-run1-security-hardening.md): `fallbackModels[].headers` values that the host framework would resolve as config values (a leading `!`, `$NAME` / `${NAME}` fragments) also make extension loading fail.
 
 ## Considered Options
 

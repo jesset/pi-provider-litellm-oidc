@@ -143,7 +143,7 @@ pi
 >
 > **refresh 瞬态失败 backoff（v0.10.0 起）**：Keycloak 瞬断/限流时，框架 credential lock 后排队的刷新调用会形成惊群。扩展按实例与 refresh token 记录 5s backoff 窗口，窗口内直接返回未过期的旧凭据；仅瞬态异常（网络/解析层）记录 backoff，OAuth 语义错误（如 `invalid_grant`）照常抛出以强制重新 `/login`，旧 token 已过期时不 backoff。
 >
-> **网关提供的内容二次校验**：网关返回的图像 URL 在回落下载前强制 HTTPS（不跟随跨 origin 重定向，仅接受 `image/*` 响应才嵌入）；持久化模型目录每次重载时重新校验——剥离存储条目的 `baseUrl` / `headers` 键、丢弃无字符串 `id` 的条目——手工篡改的 `models-store.json` 无法改写携带 JWT 的请求地址或注入 header。
+> **网关提供的内容二次校验**：网关返回的图像 URL 在回落下载前强制 HTTPS（不跟随跨 origin 重定向，仅接受 `image/*` 响应才嵌入）；持久化模型目录每次重载时重新校验——剥离存储条目的 `baseUrl` / `headers` 键、丢弃无字符串 `id` 的条目——手工篡改的 `models-store.json` 无法改写携带 JWT 的请求地址或注入 header。模型级 header 值（`fallbackModels[].headers`）为字面字符串：宿主框架会重解释为命令或环境引用的值（前导 `!`、`$NAME`、`${NAME}`）在加载期拒绝。
 
 ### 多实例：JSON 配置文件（v0.11.0 起）
 

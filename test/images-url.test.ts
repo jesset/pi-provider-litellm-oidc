@@ -1,30 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import { createImagesApi } from "../extension/images.ts";
+import { mockFetch } from "./helpers.ts";
 
 /**
  * generateImages url 回落下载的安全约束回归（审计 T2）：
  * data[].url 由网关/上游选择，下载前必须满足与其它出站 URL 相同的 origin 门槛
  * （assertSecureUrl：https 或回环 http；file: 等一律拒绝）、二次 fetch 不跟随
  * 跨 origin 重定向（redirect:"error"）、且只嵌入 content-type 为 image/* 的响应体。
- * 接缝为 createImagesApi 公开导出，fetch 以 stub 替换。
+ * 接缝为 createImagesApi 公开导出，fetch 以 stub 替换（mockFetch，见 helpers.ts）。
  */
-
-/** 替换全局 fetch 为按 URL 分发的 responder；返回捕获的请求与还原函数。 */
-function mockFetch(respond: (url: string, init?: RequestInit) => Response) {
-  const realFetch = globalThis.fetch;
-  const requests: Array<{ url: string; init?: RequestInit }> = [];
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    requests.push({ url, init });
-    return respond(url, init);
-  }) as typeof fetch;
-  return {
-    requests,
-    restore: () => {
-      globalThis.fetch = realFetch;
-    },
-  };
-}
 
 function imageModel() {
   return {

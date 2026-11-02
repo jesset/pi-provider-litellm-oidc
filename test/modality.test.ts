@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import type { ProviderConfig } from "@earendil-works/pi-coding-agent";
 import { parseConfigFile } from "../extension/config.ts";
 import { setupExtension } from "../extension/index.ts";
-import { opaqueToken } from "./helpers.ts";
+import { mockFetch, opaqueToken } from "./helpers.ts";
 
 /**
  * 非 chat 模态接入（image_generation / image_edit / decisions）的集成接缝测试：
@@ -68,23 +68,6 @@ function mockRefreshContext() {
       publish: async (entry: unknown) => {
         published.push(entry);
       },
-    },
-  };
-}
-
-/** 替换全局 fetch 为按 URL 分发的 responder；返回捕获的请求与还原函数。 */
-function mockFetch(respond: (url: string, init?: RequestInit) => Response) {
-  const realFetch = globalThis.fetch;
-  const requests: Array<{ url: string; init?: RequestInit }> = [];
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
-    requests.push({ url, init });
-    return respond(url, init);
-  }) as typeof fetch;
-  return {
-    requests,
-    restore: () => {
-      globalThis.fetch = realFetch;
     },
   };
 }
