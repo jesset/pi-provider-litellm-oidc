@@ -330,7 +330,19 @@ function fallbackModel(value: unknown, path: string): ProviderModelConfig {
   }
   if (raw.headers !== undefined) {
     const headers = record(raw.headers, `${path}.headers`);
-    for (const [key, entry] of Object.entries(headers)) stringValue(entry, `${path}.headers.${key}`, true);
+    for (const [key, entry] of Object.entries(headers)) {
+      const value = stringValue(entry, `${path}.headers.${key}`, true);
+      // pi 把模型级 header 值当作配置值在请求时解析：前导 "!" 会把其余部分
+      // 作为 shell 命令执行，$NAME / ${NAME} 会把环境变量展开进出站请求头
+      // （pi-coding-agent dist/core/resolve-config-value.js）。header 值是数据
+      // 而非命令——拒绝而不是静默重解释。
+      if (value.startsWith("!")) {
+        throw new Error(`${path}.headers.${key} must not start with "!": the host framework would execute it as a shell command`);
+      }
+      if (/\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/.test(value)) {
+        throw new Error(`${path}.headers.${key} must not contain $NAME / \${NAME}: the host framework would expand environment variables into the request header`);
+      }
+    }
   }
   if (raw.compat !== undefined) modelCompat(raw.compat, `${path}.compat`);
   return value as ProviderModelConfig;

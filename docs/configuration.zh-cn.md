@@ -61,7 +61,7 @@ LiteLLM 在 `/v1/messages`（anthropic-messages 腿）响应头返回 `x-litellm
 
 ## 模型列表策略
 
-- 静态兜底目录按实例声明（`fallbackModels`，缺省为空），保证离线/失败时行为明确
+- 静态兜底目录按实例声明（`fallbackModels`，缺省为空），保证离线/失败时行为明确；模型级 header 值为字面值，`!` 前缀与 `$NAME`/`${NAME}` 片段在加载期拒绝（否则宿主框架会将其解析为配置值，执行命令或展开环境变量）
 - 网络刷新成功的目录经 `context.publish({ persist })` 按 provider 持久化：pi 写入 `~/.pi/agent/models-store.json`，omp 写入 `models.db`；之后离线启动直接恢复各实例的真实目录
 - `refreshModels` 遵守框架两阶段刷新协议：`allowNetwork=false`（扩展注册、每次 refresh 的 phase 1）零网络请求；网络阶段从 `context.credential` 取已刷新的 access token 调 `/model/info`（合并框架 abort signal 与本地 15s 超时）
 - 数据源用 `/model/info` 而非 `/v1/models`：前者返回 deployment 级 DB 实配值（token limits、`supports_vision`、mode），后者的这些字段来自 LiteLLM 静态 cost map 按公开模型名查找——自研/别名模型一律缺失，会被误滤掉。要求网关把 `/model/info` 列入 `public_routes`（用户 JWT 可访问）

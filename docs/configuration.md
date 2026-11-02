@@ -61,7 +61,7 @@ LiteLLM returns `x-litellm-response-cost` (total cost of one request) on `/v1/me
 
 ## Model catalog strategy
 
-- The static fallback catalog is declared per instance (`fallbackModels`, empty by default), so behavior is well-defined offline and on failure
+- The static fallback catalog is declared per instance (`fallbackModels`, empty by default), so behavior is well-defined offline and on failure; model-level header values are literal values — a leading `!` or `$NAME`/`${NAME}` fragments are rejected at load time (the host framework would otherwise resolve them as config values, executing commands or expanding environment variables)
 - A successful network refresh persists the catalog per provider through `context.publish({ persist })`: pi writes `~/.pi/agent/models-store.json`, omp writes `models.db`; later offline starts restore each instance's real catalog directly
 - `refreshModels` follows the framework's two-phase protocol: `allowNetwork=false` (extension registration and phase 1 of every refresh) never touches the network; the network phase takes the already-refreshed access token from `context.credential` and calls `/model/info` (combined framework abort signal and a local 15s timeout)
 - The data source is `/model/info`, not `/v1/models`: the former returns deployment-level DB values (token limits, `supports_vision`, mode), while the latter derives those fields from LiteLLM's static cost map keyed by public model name, so self-hosted and alias models are missing entirely and get filtered out. The gateway must list `/model/info` in `public_routes` (reachable with a user JWT)

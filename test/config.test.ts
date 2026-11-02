@@ -283,6 +283,37 @@ describe("文件 schema 与归一化", () => {
     ).toThrow();
   });
 
+  it("fallbackModels[].headers 值必须是字面值：`!` 前缀与 $NAME/${NAME} 片段在加载期拒绝（宿主会将其解析为配置值）", () => {
+    const model = {
+      id: "x", name: "x", reasoning: false, input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1000, maxTokens: 100,
+    };
+    // 前导 '!'：宿主 resolve-config-value 会把其余部分当 shell 命令执行，stdout 成为出站头
+    expect(() => parseConfigFile({
+      instances: [{ ...instance(), fallbackModels: [{ ...model, headers: { "x-litellm-custom": "!id" } }] }],
+    }, "file:test", {})).toThrow(/fallbackModels\[0\]\.headers\.x-litellm-custom/);
+    // stringValue 先 trim，' !cmd' 同样归一为命令
+    expect(() => parseConfigFile({
+      instances: [{ ...instance(), fallbackModels: [{ ...model, headers: { "x": " !echo hi" } }] }],
+    }, "file:test", {})).toThrow(/headers\.x must not start with/);
+    // ${NAME} 片段：环境变量展开进出站请求头
+    expect(() => parseConfigFile({
+      instances: [{ ...instance(), fallbackModels: [{ ...model, headers: { "x-leak": "${HOME}" } }] }],
+    }, "file:test", {})).toThrow(/headers\.x-leak must not contain/);
+    // 裸 $NAME 片段同样展开
+    expect(() => parseConfigFile({
+      instances: [{ ...instance(), fallbackModels: [{ ...model, headers: { "x-leak": "token-$SECRET" } }] }],
+    }, "file:test", {})).toThrow(/headers\.x-leak must not contain/);
+    // 字面值不受影响（含不构成标识符的 '$' 与空白值），原样透传
+    const config = parseConfigFile({
+      instances: [{
+        ...instance(),
+        fallbackModels: [{ ...model, headers: { "x-static": "yes", "x-price": "cost: $5", "x-empty": "  " } }],
+      }],
+    }, "file:test", {});
+    expect(config.instances[0].fallbackModels[0].headers).toEqual({ "x-static": "yes", "x-price": "cost: $5", "x-empty": "  " });
+  });
+
   it("fallbackModels 完整透传 ProviderModelConfig", () => {
     const model = {
       id: "claude-sonnet-5",
