@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Security
+
+Medium findings from security audit run-1:
+
+- **Reject host config-value metacharacters in `fallbackModels[].headers`**: pi resolves model header values as config values at request time — a leading `!` executes the rest as a shell command and `$NAME`/`${NAME}` fragments expand environment variables into the outbound request header, so a deployment-supplied config file could run commands as the local user and exfiltrate environment variables to the configured gateway on every request. Such values now fail fast at load time with the field path; literal values (including `$` not followed by an identifier) pass unchanged
+- **Validate gateway-supplied image URLs before download**: the `generateImages` url-fallback branch downloaded `data[].url` verbatim, letting a hostile or compromised gateway/upstream direct the client at arbitrary origins. The secondary fetch now applies `assertSecureUrl` (https-only, loopback http exempt; `file:` rejected), `redirect: "error"` (cross-origin redirects not followed) and an `image/*` content-type check before embedding, with errors surfacing as `stopReason: "error"` per the no-throw API contract
+- **Validate-or-strip the persisted catalog on reload**: `storedModels` trusted `models-store.json` entries with a bare cast, so an attacker-edited entry could carry a model-level `baseUrl` redirecting JWT-bearing requests away from the config-validated gateway, plus injected `headers`. Reload now drops `baseUrl`/`headers` keys (the write side never emits them) and requires a non-empty string `id`; an empty result still falls back to the static catalog
+
 ## [0.13.1] - 2026-11-01
 
 Patch release with no functional changes: this is the first version published

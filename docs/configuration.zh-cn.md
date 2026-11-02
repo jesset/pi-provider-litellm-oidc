@@ -61,8 +61,8 @@ LiteLLM 在 `/v1/messages`（anthropic-messages 腿）响应头返回 `x-litellm
 
 ## 模型列表策略
 
-- 静态兜底目录按实例声明（`fallbackModels`，缺省为空），保证离线/失败时行为明确
-- 网络刷新成功的目录经 `context.publish({ persist })` 按 provider 持久化：pi 写入 `~/.pi/agent/models-store.json`，omp 写入 `models.db`；之后离线启动直接恢复各实例的真实目录
+- 静态兜底目录按实例声明（`fallbackModels`，缺省为空），保证离线/失败时行为明确；模型级 header 值为字面值，`!` 前缀与 `$NAME`/`${NAME}` 片段在加载期拒绝（否则宿主框架会将其解析为配置值，执行命令或展开环境变量）
+- 网络刷新成功的目录经 `context.publish({ persist })` 按 provider 持久化：pi 写入 `~/.pi/agent/models-store.json`，omp 写入 `models.db`；之后离线启动恢复各实例的真实目录前先重校验存储条目（剥离不可信键：丢弃 `baseUrl` / `headers`，删除无非空字符串 `id` 的条目——见 [ADR 0003](adr/0003-audit-run1-security-hardening.md)）
 - `refreshModels` 遵守框架两阶段刷新协议：`allowNetwork=false`（扩展注册、每次 refresh 的 phase 1）零网络请求；网络阶段从 `context.credential` 取已刷新的 access token 调 `/model/info`（合并框架 abort signal 与本地 15s 超时）
 - 数据源用 `/model/info` 而非 `/v1/models`：前者返回 deployment 级 DB 实配值（token limits、`supports_vision`、mode），后者的这些字段来自 LiteLLM 静态 cost map 按公开模型名查找——自研/别名模型一律缺失，会被误滤掉。要求网关把 `/model/info` 列入 `public_routes`（用户 JWT 可访问）
 - 过滤与分流规则：`mode` 显式为 embedding/rerank/audio_transcription/audio_speech/video_generation/realtime/batch/ocr 的条目剔除（pi 无对应消费通道）；`image_generation`/`image_edit` 分流为 pi `type:"image"` 条目、`decisions`/`evaluation`（同义 mode）分流为 `type:"classifier"` 条目（见[非 chat 模态](#非-chat-模态image--decisions)）；mode 缺失不据此排除；隐藏 `-openai` 后缀条目（OpenAI 协议腿孪生，与 anthropic 腿重复）；同名多 deployment 聚合为一条（token 上限等标量字段取首个非空值，成本字段取 max 保守上界）
@@ -70,7 +70,7 @@ LiteLLM 在 `/v1/messages`（anthropic-messages 腿）响应头返回 `x-litellm
 - `model.cost` 从 `/model/info` 的 4 个 per-token 成本字段实配（`input_cost_per_token`/`output_cost_per_token`/`cache_read_input_token_cost`/`cache_creation_input_token_cost`，换算为 pi 的 USD/百万 token 后多 deployment 取 max 上界，缺失保持 0）——请求前估算与 `x-litellm-response-cost` 实付口径互补
 - `reasoning` 四级回落推断：网关 `supports_reasoning` 声明层三态 → `reasoning_effort_levels`（档位存在即推理）→ `supported_openai_params` 含 `reasoning_effort`/`thinking` → 名字前缀正则 `REASONING_MODEL_PATTERN` 兜底
 - 思考档位自动推导 + 菜单精确对齐（v0.10.1 起）：网关 `model_info` 的 `reasoning_effort_levels`（完整档集，同名多 deployment 取交集，未知档名忽略）或 `supports_{xhigh,max}_reasoning_effort` 布尔可精确声明档位——**有档位时菜单与档集精确对齐**：档集内的档直传自身 effort（选什么发什么），档集外的默认档以 `null` 从菜单显式排除，网关 `none` 档即 off（不含则 `off:null`——不发 disabled，对强制思考后端会 4xx，显式 off 请求 clamp 最低档）；**无档位（或同名组交集为空）**维持 `{ max: "max" }` 兜底（全菜单可选）。`forceAdaptiveThinking` 对全部推理模型保留（effort 传递通道：budget 路径无法表达档位枚举）。设计取舍见 [ADR 0001](adr/0001-align-thinking-menu-with-gateway-effort-levels.md)
-- 未登录或拉取失败时回退该实例的持久化目录 ?? 静态兜底目录
+- 未登录或拉取失败时回退该实例的持久化目录（重载时重校验——剥离不可信键）?? 静态兜底目录
 
 ## 非 chat 模态（image / decisions）
 
