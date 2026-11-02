@@ -142,6 +142,8 @@ Variables can live in the `env` block of `~/.pi/agent/settings.json`, in your sh
 > **HTTPS enforcement (from v0.10.0)**: `LITELLM_OIDC_GATEWAY_URL` / `LITELLM_OIDC_KEYCLOAK_URL`, plus `gatewayUrl` / `keycloakUrl` / `fallbackModels[].baseUrl` in the config file, must use `https://`. An `http://` misconfiguration sends the JWT and refresh token in plaintext, so the extension fails fast at load time. Loopback hosts are exempt (`localhost`, IPv4 literals in `127.0.0.0/8`, `[::1]`) for local debug proxies; `127.*` domains are not loopback.
 >
 > **Backoff for transient refresh failures (from v0.10.0)**: when Keycloak is briefly down or rate-limits requests, refreshes queued behind the framework credential lock form a thundering herd. The extension keeps a 5-second backoff window keyed by instance and refresh token and returns unexpired old credentials inside it. Only transient errors (network/parse) are recorded; OAuth semantic errors such as `invalid_grant` still throw so you are forced back through `/login`; expired tokens are not backed off.
+>
+> **Gateway-supplied content is re-validated**: image URLs returned by the gateway are HTTPS-enforced before the fallback download (cross-origin redirects are not followed, and only `image/*` responses are embedded), and the persisted model catalog is re-validated on every reload — `baseUrl` / `headers` keys are stripped from stored entries and entries without a string `id` are dropped — so a hand-edited `models-store.json` cannot redirect JWT-bearing requests or inject headers.
 
 ### Multiple instances: JSON config file (from v0.11.0)
 
