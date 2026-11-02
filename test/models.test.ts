@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { fallbackModels, fetchGatewayModels, stampCustomerHeader, transformModelInfo } from "../extension/models.ts";
+import { fallbackModels, fetchGatewayModels, stampCustomerHeader, storedModels, transformModelInfo } from "../extension/models.ts";
 import { makeJwt, opaqueToken, testInstance } from "./helpers.ts";
 
 /** 把结果按 id 索引，断言不依赖数组顺序（Map 按首次出现顺序，但测试应稳）。 */
@@ -713,5 +713,59 @@ describe("多实例模型目录", () => {
     } finally {
       globalThis.fetch = realFetch;
     }
+  });
+});
+
+/**
+ * storedModels：重载持久化目录（models-store.json）时的 validate-or-strip。
+ * 写侧（transformModelInfo 的 persist 载荷）从不产出 baseUrl/headers ——
+ * 重载时若出现这些键，只能是磁盘篡改；剥离而非信任（模型级 baseUrl 会覆盖
+ * 配置校验过的 https 网关源，而该覆盖同样携带 JWT，见 config.ts fallbackModel）。
+ */
+describe("storedModels — 重载 validate-or-strip", () => {
+  const checkedAt = "2025-01-01T00:00:00.000Z";
+  const cachedEntry = {
+    id: "claude-sonnet-5",
+    name: "claude-sonnet-5",
+    reasoning: true,
+    input: ["text"] as ("text" | "image")[],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200000,
+    maxTokens: 64000,
+  };
+
+  it("剥离被篡改的 http baseUrl 与注入的 headers（写侧从不产出它们）", () => {
+    const tampered = {
+      ...cachedEntry,
+      baseUrl: "http://attacker.example.com/v1",
+      headers: { "x-injected": "from-store" },
+    };
+    const result = storedModels({ checkedAt, models: [tampered] });
+    expect(result).toHaveLength(1);
+    expect(result![0]).not.toHaveProperty("baseUrl");
+    expect(result![0]).not.toHaveProperty("headers");
+    expect(result![0].id).toBe("claude-sonnet-5");
+  });
+
+  it("合法缓存条目原样往返（其余字段不动）", () => {
+    expect(storedModels({ checkedAt, models: [cachedEntry] })).toEqual([cachedEntry]);
+  });
+
+  it("丢弃缺少非空字符串 id 的条目，保留好条目", () => {
+    const mixed = storedModels({
+      checkedAt,
+      models: [{ ...cachedEntry, id: "" }, cachedEntry],
+    });
+    expect(mixed).toHaveLength(1);
+    expect(mixed![0].id).toBe("claude-sonnet-5");
+  });
+
+  it("过滤后为空则整体返回 undefined（保持现有回落链）", () => {
+    expect(storedModels({ checkedAt, models: [{ ...cachedEntry, id: "" }] })).toBeUndefined();
+  });
+
+  it("空 store / 空数组仍返回 undefined（现有回落）", () => {
+    expect(storedModels(undefined)).toBeUndefined();
+    expect(storedModels({ checkedAt, models: [] })).toBeUndefined();
   });
 });
